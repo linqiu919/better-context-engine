@@ -1,0 +1,149 @@
+# 推送 v* 格式 tag（如 v1.0.0）时构建并发布 Docker 镜像到 Docker Hub。
+# 需在仓库 Settings → Secrets and variables → Actions 配置两个 secret：
+#   DOCKERHUB_USERNAME — Docker Hub 用户名（同时作为镜像命名空间）
+#   DOCKERHUB_TOKEN    — Docker Hub Access Token（hub.docker.com → Account Settings → Security）
+# 镜像标签：v1.2.3 → 1.2.3 + 1.2 + latest。
+# 多架构：amd64 / arm64 各在原生 runner 上构建（CGo 不走 QEMU 模拟），
+# 按 digest 推送后由 merge job 合并为单一多架构 manifest。
+# 注：ubuntu-24.04-arm 为标准 runner，私有仓库计入套餐免费分钟数（2026-01 起支持）。
+name: docker-release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/better-context-engine
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 规范化平台名（用作 artifact / 缓存 key）
+        run: echo "PLATFORM_PAIR=${PLATFORM//\//-}" >> "$GITHUB_ENV"
+        env:
+          PLATFORM: ${{ matrix.platform }}
+
+      - name: 设置 Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Go 增量编译缓存（GOMODCACHE/GOCACHE cache mount）持久化：
+      # runner 是一次性的，cache mount 不随 type=gha 层缓存保存，
+      # 用 actions/cache + buildkit-cache-dance 在构建前注入、构建后提取。
+      # key 含 go.sum/Dockerfile 哈希：依赖或构建方式变了刷新缓存，
+      # 其余提交经 restore-keys 复用旧缓存（tree-sitter CGo 产物仍然命中）。
+      - name: 恢复 Go 缓存
+        id: gocache
+        uses: actions/cache@v4
+        with:
+          path: |
+            go-mod-cache
+            go-build-cache
+          key: gocache-${{ env.PLATFORM_PAIR }}-${{ hashFiles('go.sum', 'Dockerfile') }}
+          restore-keys: |
+            gocache-${{ env.PLATFORM_PAIR }}-
+
+      - name: 注入 Go 缓存到 cache mount
+        uses: reproducible-containers/buildkit-cache-dance@v3
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          cache-map: |
+            {
+              "go-mod-cache": "/go/pkg/mod",
+              "go-build-cache": "/root/.cache/go-build"
+            }
+          skip-extraction: ${{ steps.gocache.outputs.cache-hit }}
+
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 生成镜像 labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+
+      - name: 构建并按 digest 推送
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # 把触发本次发布的 git tag 注入二进制（控制台版本号展示）
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          # 不打 tag，仅按 digest 推送；tag 由 merge job 统一挂到多架构 manifest 上
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          # GitHub Actions 层缓存按平台隔离：npm ci / go mod download / CGo 编译层跨构建复用
+          cache-from: type=gha,scope=build-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=build-${{ env.PLATFORM_PAIR }}
+
+      - name: 导出 digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: 上传 digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: 下载 digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: 设置 Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 生成镜像标签
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          # semver 类型自动附带 latest（非预发布 tag 时）
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: 合并 manifest 并打标签
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "$IMAGE@sha256:%s " *)
+
+      - name: 校验多架构镜像
+        run: docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"

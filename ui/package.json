@@ -1,0 +1,25 @@
+{
+  "name": "better-context-engine-console",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@geist-ui/core": "^2.3.8",
+    "@geist-ui/icons": "^1.0.2",
+    "react": "^17.0.2",
+    "react-dom": "^17.0.2",
+    "recharts": "^2.15.4"
+  },
+  "devDependencies": {
+    "@types/react": "^17.0.87",
+    "@types/react-dom": "^17.0.26",
+    "@vitejs/plugin-react": "^4.4.1",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}

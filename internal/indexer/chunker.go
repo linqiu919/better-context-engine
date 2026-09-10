@@ -1,0 +1,323 @@
+package indexer
+
+import (
+	"fmt"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	"github.com/linqiu919/better-context-engine/internal/domain"
+)
+
+// Structure-aware heuristic chunker. It splits a blob on top-level declaration
+// boundaries per language so each chunk carries a symbol, and falls back to
+// fixed windows for languages it does not understand. Output is deterministic
+// for a given blob, which keeps chunk IDs (blobName:seq) content-addressed.
+
+const (
+	maxChunkLines   = 120
+	windowChunkSize = 80
+	windowOverlap   = 12
+	minChunkLines   = 4
+)
+
+type declPattern struct {
+	re   *regexp.Regexp
+	kind string
+}
+
+func decl(kind, expr string) declPattern {
+	return declPattern{re: regexp.MustCompile(expr), kind: kind}
+}
+
+var declPatterns = map[string][]declPattern{
+	"Go": {
+		decl("func", `^func\s+(?:\([^)]*\)\s*)?([A-Za-z_][A-Za-z0-9_]*)`),
+		decl("type", `^type\s+([A-Za-z_][A-Za-z0-9_]*)`),
+		decl("var", `^(?:var|const)\s+([A-Za-z_][A-Za-z0-9_]*)`),
+	},
+	"TypeScript": {
+		decl("func", `^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)`),
+		decl("class", `^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)`),
+		decl("interface", `^(?:export\s+)?interface\s+([A-Za-z_$][\w$]*)`),
+		decl("type", `^(?:export\s+)?type\s+([A-Za-z_$][\w$]*)`),
+		decl("var", `^(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=`),
+	},
+	"Python": {
+		decl("func", `^(?:async\s+)?def\s+([A-Za-z_]\w*)`),
+		decl("class", `^class\s+([A-Za-z_]\w*)`),
+	},
+	"Java": {
+		decl("class", `^(?:public\s+|final\s+|abstract\s+)*(?:class|interface|enum|record)\s+([A-Za-z_$][\w$]*)`),
+		decl("method", `^\s{1,8}(?:public|protected|private|static)[\w<>\[\],\s]*\s([A-Za-z_$][\w$]*)\s*\([^;]*$`),
+	},
+	"Rust": {
+		decl("func", `^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?fn\s+([A-Za-z_]\w*)`),
+		decl("type", `^(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum|trait|union)\s+([A-Za-z_]\w*)`),
+		decl("impl", `^impl\b.*?\bfor\s+([A-Za-z_]\w*)|^impl(?:<[^>]*>)?\s+([A-Za-z_]\w*)`),
+		decl("mod", `^(?:pub\s+)?mod\s+([A-Za-z_]\w*)`),
+	},
+	"C": {
+		decl("func", `^[A-Za-z_][\w\s\*]*[\s\*]([A-Za-z_]\w*)\s*\([^;]*$`),
+		decl("type", `^(?:typedef\s+)?(?:struct|enum|union)\s+([A-Za-z_]\w*)`),
+	},
+	"Markdown": {
+		decl("heading", `^#{1,6}\s+(.+?)\s*$`),
+	},
+	// Config formats: symbols come from top-level keys/tags so declarative
+	// files participate in the structural path and relate hints instead of
+	// degrading to anonymous fixed windows. Deeper nesting stays inside the
+	// parent chunk on purpose — a spring `feign:` or pom `<dependencies>`
+	// block is the retrieval unit, not each leaf value.
+	"YAML": {
+		decl("key", `^([A-Za-z_][A-Za-z0-9_.-]*)\s*:`),
+	},
+	"JSON": {
+		decl("key", `^[\t ]{0,2}"([^"]+)"\s*:`),
+	},
+	"XML": {
+		decl("tag", `^[\t ]{0,2}<([A-Za-z][\w.-]*)[\s>]`),
+	},
+	"Properties": {
+		decl("key", `^([A-Za-z_][\w.-]*)\s*=`),
+	},
+}
+
+func init() {
+	declPatterns["JavaScript"] = declPatterns["TypeScript"]
+	declPatterns["TSX"] = declPatterns["TypeScript"] // regex fallback when the TSX grammar parse yields nothing
+	declPatterns["C++"] = declPatterns["C"]
+	// Vue SFCs mix markup and code in one file; boundaries are the SFC blocks,
+	// the options-API sections inside them, and (for <script setup>) the same
+	// top-level declarations TypeScript uses. Method-level splitting is
+	// deliberately absent: RE2 has no keyword lookahead, so an indented
+	// `name(...) {` pattern would chunk on every `if (`/`for (` line.
+	declPatterns["Vue"] = append([]declPattern{
+		decl("block", `^<(template|script|style)\b`),
+		decl("section", `^[\t ]{2,6}(data|methods|computed|watch|props|components|emits|setup|mounted|created|beforeMount|beforeDestroy|unmounted)\s*[:(]`),
+	}, declPatterns["TypeScript"]...)
+}
+
+// segment is a half-open line index range destined to become one chunk
+// (windowed downstream if oversized). Shared by the AST and heuristic paths.
+type segment struct {
+	start, end int
+	symbol     string
+	kind       string
+}
+
+// astExempt short-circuits the tree-sitter parse for files whose cost cannot
+// pay off: oversized sources end up window-split downstream regardless, and
+// minified or machine-generated artifacts parse into meaningless segments.
+// Exempt files still flow through the regex/window fallbacks, postings and
+// embeddings — only the method-level boundaries are given up. The parse is
+// the dominant CPU cost of ingestion, so a single multi-MB bundle in a batch
+// otherwise stalls a small host for seconds.
+const (
+	astMaxParseBytes    = 256 << 10
+	astMinifiedAvgLine  = 300
+	astGeneratedHeadLen = 512
+)
+
+// generatedMarkers are the cross-ecosystem "this file is generated" header
+// conventions (matched case-insensitively in the first astGeneratedHeadLen
+// bytes): "do not edit" covers Go's official convention and protoc output in
+// every language, "@generated" the Meta/Thrift/prost family, "<auto-generated"
+// the C# Roslyn convention.
+var generatedMarkers = []string{"do not edit", "@generated", "<auto-generated"}
+
+func astExempt(path, content string, lineCount int) bool {
+	if len(content) > astMaxParseBytes {
+		return true
+	}
+	// Minified bundles pack the whole file into a handful of enormous lines.
+	if len(content)/max(1, lineCount) > astMinifiedAvgLine {
+		return true
+	}
+	p := strings.ToLower(filepath.ToSlash(path))
+	if strings.Contains(p, ".min.") || strings.Contains(p, "/dist/") || strings.Contains(p, "/vendor/") || strings.Contains(p, "/node_modules/") {
+		return true
+	}
+	// Generated files declare themselves up top; conventions vary by
+	// ecosystem, so any marker hit counts.
+	head := strings.ToLower(content[:min(len(content), astGeneratedHeadLen)])
+	for _, m := range generatedMarkers {
+		if strings.Contains(head, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// ChunkBlob splits blob content into structure-aware chunks. Line numbers are
+// 1-based and inclusive. tree-sitter AST layout is tried first (uniformly
+// method-level for its 8 grammars + Vue script blocks); languages without a
+// grammar, failed parses, declaration-free files and astExempt artifacts fall
+// back to the per-language regex heuristics, then to fixed windows.
+func ChunkBlob(blobName, path, content string) []domain.Chunk {
+	lines := strings.Split(content, "\n")
+	lang := language(path)
+
+	var segments []segment
+	if astExempt(path, content, len(lines)) {
+		// fall through to the heuristic/window path below
+	} else if lang == "Vue" {
+		segments = vueSegments(lines)
+	} else if segs, ok := astSegments(lang, content); ok {
+		segments = segs
+	}
+	if segments == nil {
+		segments = heuristicSegments(lines, declPatterns[lang])
+	}
+	segments = mergeTinySegments(segments)
+
+	chunks := []domain.Chunk{}
+	seq := 0
+	emit := func(start, end int, symbol, kind string) {
+		if trimmedEmpty(lines[start:end]) {
+			return
+		}
+		chunks = append(chunks, domain.Chunk{
+			ID: fmt.Sprintf("%s:%d", blobName, seq), BlobName: blobName, Seq: seq,
+			Symbol: symbol, SymbolKind: kind, StartLine: start + 1, EndLine: end, Language: lang,
+		})
+		seq++
+	}
+	for _, seg := range segments {
+		if seg.end-seg.start <= maxChunkLines {
+			emit(seg.start, seg.end, seg.symbol, seg.kind)
+			continue
+		}
+		for start := seg.start; start < seg.end; start += windowChunkSize - windowOverlap {
+			end := start + windowChunkSize
+			if end > seg.end {
+				end = seg.end
+			}
+			emit(start, end, seg.symbol, seg.kind)
+			if end == seg.end {
+				break
+			}
+		}
+	}
+	return chunks
+}
+
+// heuristicSegments is the regex fallback: declaration-pattern boundaries
+// with doc comments attached, or fixed overlapping windows when the language
+// has no patterns (or none matched).
+func heuristicSegments(lines []string, patterns []declPattern) []segment {
+	type boundary struct {
+		line   int
+		symbol string
+		kind   string
+	}
+	bounds := []boundary{}
+	for i, line := range lines {
+		for _, p := range patterns {
+			m := p.re.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			symbol := ""
+			for _, g := range m[1:] {
+				if g != "" {
+					symbol = g
+					break
+				}
+			}
+			bounds = append(bounds, boundary{line: i, symbol: symbol, kind: p.kind})
+			break
+		}
+	}
+	segments := []segment{}
+	if len(bounds) == 0 {
+		for start := 0; start < len(lines); start += windowChunkSize - windowOverlap {
+			end := start + windowChunkSize
+			if end > len(lines) {
+				end = len(lines)
+			}
+			segments = append(segments, segment{start: start, end: end, kind: "window"})
+			if end == len(lines) {
+				break
+			}
+		}
+		return segments
+	}
+	// Attach contiguous doc comments above a declaration to its chunk.
+	startOf := func(b boundary) int {
+		start := b.line
+		for start > 0 && isCommentLine(lines[start-1]) {
+			start--
+		}
+		return start
+	}
+	if first := startOf(bounds[0]); first > 0 {
+		segments = append(segments, segment{start: 0, end: first, kind: "preamble"})
+	}
+	for i, b := range bounds {
+		start := startOf(b)
+		end := len(lines)
+		if i+1 < len(bounds) {
+			end = startOf(bounds[i+1])
+		}
+		if end <= start {
+			continue
+		}
+		segments = append(segments, segment{start: start, end: end, symbol: b.symbol, kind: b.kind})
+	}
+	return segments
+}
+
+// mergeTinySegments folds sub-minChunkLines segments into their predecessor
+// so one-line declarations, SFC tag lines and AST filler slivers do not
+// become noise chunks.
+func mergeTinySegments(segments []segment) []segment {
+	merged := segments[:0]
+	for _, seg := range segments {
+		if len(merged) > 0 && seg.end-seg.start < minChunkLines && merged[len(merged)-1].end == seg.start {
+			prev := &merged[len(merged)-1]
+			prev.end = seg.end
+			if prev.symbol == "" {
+				prev.symbol, prev.kind = seg.symbol, seg.kind
+			}
+			continue
+		}
+		merged = append(merged, seg)
+	}
+	return merged
+}
+
+// chunkText slices chunk content out of full blob content.
+func chunkText(content string, c domain.Chunk) string {
+	lines := strings.Split(content, "\n")
+	start, end := c.StartLine-1, c.EndLine
+	if start < 0 || start >= len(lines) {
+		return ""
+	}
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return strings.Join(lines[start:end], "\n")
+}
+
+func isCommentLine(line string) bool {
+	t := strings.TrimSpace(line)
+	if t == "" {
+		return false
+	}
+	for _, prefix := range []string{"//", "#", "/*", "*", "--", "'''", `"""`, "///"} {
+		if strings.HasPrefix(t, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func trimmedEmpty(lines []string) bool {
+	for _, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			return false
+		}
+	}
+	return true
+}

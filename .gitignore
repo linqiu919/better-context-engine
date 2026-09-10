@@ -1,0 +1,33 @@
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+.claude/
+.ace-tool/
+.cursor/
+
+# secrets & local state
+.env
+.env.local
+.bce/
+
+# internal notes (kept local, not published)
+.aidoc/
+docs/
+
+# build outputs
+bin/
+/bce
+web/dist/
+ui/dist/
+coverage.out
+
+# frontend artifacts
+ui/node_modules/
+ui/*.tsbuildinfo
+ui/vite.config.js
+ui/vite.config.d.ts
+
+# logs
+*.log
+.bce-tool/

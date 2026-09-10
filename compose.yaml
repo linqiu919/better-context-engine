@@ -1,0 +1,79 @@
+services:
+  bce:
+    # 部署用 Docker Hub 发布镜像（推 v* tag 由 CI 构建）；
+    # 本地从源码构建可改回 build: .
+    image: bifang1199/better-context-engine:${BCE_IMAGE_TAG:-latest}
+    ports:
+      - "18181:18181"
+    environment:
+      BCE_ADDR: :18181
+      BCE_DATABASE_URL: postgres://bce:bce@postgres:5432/bce?sslmode=disable
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?set BOOTSTRAP_ADMIN_PASSWORD in .env}
+      ACE_TOKEN: ${ACE_TOKEN:?set ACE_TOKEN in .env}
+      BCE_ENCRYPTION_KEY: ${BCE_ENCRYPTION_KEY:?set BCE_ENCRYPTION_KEY in .env}
+      COOKIE_SECURE: "false"
+      DEMO_DATA: ${DEMO_DATA:-false}
+      # 模型默认指向硅基流动（Qwen3-Embedding-8B / Qwen3-Reranker-8B /
+      # Qwen3.5-9B），仅需共享 Key；留空则退化为纯词法检索。
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      # 可选 Redis：跨实例限流计数与缓存；留空则全部保存在进程内。
+      BCE_REDIS_ADDR: ${BCE_REDIS_ADDR:-}
+      BCE_REDIS_PASSWORD: ${BCE_REDIS_PASSWORD:-}
+      # 对外访问地址（拼接 LinuxDo OAuth 回调）
+      BCE_PUBLIC_URL: ${BCE_PUBLIC_URL:-}
+      # 验证码发件邮箱（谷歌邮箱需使用应用专用密码）；自助注册开关
+      # 在管理后台「系统设置」页在线控制，默认开启
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      # Cloudflare Turnstile 人机验证（留空关闭）
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+      # LinuxDo 授权登录（留空隐藏入口）
+      LINUXDO_CLIENT_ID: ${LINUXDO_CLIENT_ID:-}
+      LINUXDO_CLIENT_SECRET: ${LINUXDO_CLIENT_SECRET:-}
+      # To run fully local against the optional ollama service instead:
+      # EMBEDDING_PROVIDER: ollama
+      # EMBEDDING_URL: http://ollama:11434
+      # EMBEDDING_MODEL: qwen3-embedding:0.6b
+      # EMBEDDING_DIMENSIONS: "1024"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:18181/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  postgres:
+    # 必须用带 pgvector 扩展的镜像：schema 执行 CREATE EXTENSION vector，
+    # 裸 postgres 镜像会启动失败。
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: bce
+      POSTGRES_PASSWORD: bce
+      POSTGRES_DB: bce
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bce -d bce"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["models"]
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  ollama-data:

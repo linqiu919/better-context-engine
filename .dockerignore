@@ -1,0 +1,10 @@
+.git
+.env
+.bce
+bin
+web/dist
+ui/node_modules
+ui/*.tsbuildinfo
+.DS_Store
+*.log
+.aidoc
