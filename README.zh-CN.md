@@ -4,6 +4,8 @@
 
 ACE 兼容的代码上下文检索引擎（Go）。实时索引代码库，为 AI 编程助手提供低延迟、高相关的上下文。只依赖 PostgreSQL 与一个模型端点，无需向量数据库和消息队列。
 
+![首页](.github/assets/bce-landing.png)
+
 ## 特性
 
 **检索**
@@ -29,6 +31,18 @@ ACE 兼容的代码上下文检索引擎（Go）。实时索引代码库，为 A
 - 工作区：概览 / 我的项目 / 检索调试（片段归因拆解、评测用例）/ 账户设置
 - 管理后台：用户管理（含 MCP 用量）/ 全部项目 / 系统设置（模型与注册开关）/ 公告管理 / 审计日志
 - 中英双语、明暗主题；前端经 `go:embed` 嵌入，单二进制部署
+
+## 界面预览
+
+| 索引概览 | 我的项目 |
+| --- | --- |
+| ![索引概览](.github/assets/bce-overview.png) | ![我的项目](.github/assets/bce-projects.png) |
+
+| 检索调试 | MCP 用量 |
+| --- | --- |
+| ![检索调试](.github/assets/bce-search.png) | ![MCP 用量](.github/assets/bce-mcp-usage.png) |
+
+![账户设置](.github/assets/bce-account.png)
 
 ## 默认模型
 
@@ -103,3 +117,9 @@ npm run build --prefix ui
 ```
 
 生产容器先构建前端再嵌入服务端，同时包含 `bce-agent`；`bce-server` 因 tree-sitter AST 分块器以 CGO 编译。
+
+## 许可证
+
+[PolyForm Noncommercial 1.0.0](LICENSE)——个人与非商业用途免费（研究、学习、个人项目、公益组织、教育机构等）。
+
+**商业用途需单独授权**，请提 issue 或联系 [@linqiu919](https://github.com/linqiu919) 洽谈商业许可。

@@ -4,6 +4,8 @@ English | [简体中文](README.zh-CN.md)
 
 An ACE-compatible code context retrieval engine written in Go. It indexes codebases in real time and serves low-latency, high-relevance context to AI coding assistants. The only dependencies are PostgreSQL and one model endpoint — no vector database, no message queue.
 
+![Landing page](.github/assets/bce-landing.png)
+
 ## Features
 
 **Retrieval**
@@ -29,6 +31,18 @@ An ACE-compatible code context retrieval engine written in Go. It indexes codeba
 - Workspace: overview / my projects / retrieval debugger (fragment attribution breakdown, eval cases) / account settings
 - Admin: user management (incl. MCP usage) / all projects / system settings (models & registration) / announcements / audit log
 - English & Chinese UI, light & dark themes; frontend embedded via `go:embed` for single-binary deployment
+
+## Screenshots
+
+| Index overview | My projects |
+| --- | --- |
+| ![Index overview](.github/assets/bce-overview.png) | ![My projects](.github/assets/bce-projects.png) |
+
+| Search inspect | MCP usage |
+| --- | --- |
+| ![Search inspect](.github/assets/bce-search.png) | ![MCP usage](.github/assets/bce-mcp-usage.png) |
+
+![Account settings](.github/assets/bce-account.png)
 
 ## Default models
 
@@ -103,3 +117,9 @@ npm run build --prefix ui
 ```
 
 The production container builds the frontend first and embeds it into the server; it also ships `bce-agent`. `bce-server` is compiled with CGO because of the tree-sitter AST chunker.
+
+## License
+
+[PolyForm Noncommercial 1.0.0](LICENSE) — free for personal and noncommercial use (research, study, hobby projects, nonprofits, education).
+
+**Commercial use requires a separate license.** Please open an issue or contact [@linqiu919](https://github.com/linqiu919) for commercial licensing.
