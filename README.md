@@ -123,3 +123,7 @@ The production container builds the frontend first and embeds it into the server
 [PolyForm Noncommercial 1.0.0](LICENSE) — free for personal and noncommercial use (research, study, hobby projects, nonprofits, education).
 
 **Commercial use requires a separate license.** Please open an issue or contact [@linqiu919](https://github.com/linqiu919) for commercial licensing.
+
+## 🔗 Friend Links
+
+- 🐧 [**LinuxDO**](https://linux.do) — A community for tech enthusiasts

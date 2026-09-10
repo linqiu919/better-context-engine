@@ -123,3 +123,7 @@ npm run build --prefix ui
 [PolyForm Noncommercial 1.0.0](LICENSE)——个人与非商业用途免费（研究、学习、个人项目、公益组织、教育机构等）。
 
 **商业用途需单独授权**，请提 issue 或联系 [@linqiu919](https://github.com/linqiu919) 洽谈商业许可。
+
+## 🔗 Friend Links
+
+- 🐧 [**LinuxDO**](https://linux.do) — A community for tech enthusiasts
