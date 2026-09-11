@@ -44,7 +44,9 @@ An ACE-compatible code context retrieval engine written in Go. It indexes codeba
 
 ![Account settings](.github/assets/bce-account.png)
 
-## Default models
+## Model configuration
+
+### Out-of-the-box defaults
 
 | Path | Default model | Notes |
 | --- | --- | --- |
@@ -52,7 +54,18 @@ An ACE-compatible code context retrieval engine written in Go. It indexes codeba
 | Reranker | `Qwen/Qwen3-Reranker-8B` | Jina/Cohere-compatible `/rerank` |
 | Prompt enhancer | `Qwen/Qwen3.5-9B` | OpenAI chat protocol |
 
-The default endpoint is SiliconFlow (`api.siliconflow.cn/v1`); a single `MODEL_API_KEY` covers all three paths. Everything can be switched to local services (ollama/vLLM) via environment variables or the admin console. Without any model configured, retrieval runs on the lexical/structural paths only.
+The default endpoint is SiliconFlow (`api.siliconflow.cn/v1`); a single `MODEL_API_KEY` covers all three paths for a zero-friction start. Everything can be switched to local services (ollama/vLLM) via environment variables or the admin console. Without any model configured, retrieval runs on the lexical/structural paths only.
+
+### Recommended setup (what the hosted instance runs)
+
+| Path | Model | Provider |
+| --- | --- | --- |
+| Embedding | `voyage-code-4` (1024 dims) | Voyage AI |
+| Reranker | `rerank-2.5` (Top-K 50) | Voyage AI |
+| Prompt enhancer | `Qwen/Qwen3.5-9B` | SiliconFlow |
+| Chunk summaries | `Qwen/Qwen3-8B` | SiliconFlow |
+
+Voyage's code-specialized embedding and rerank models perform noticeably better for code retrieval (embedding and reranker share the `https://api.voyageai.com/v1` endpoint and key; the query/document asymmetry is handled automatically via `input_type`). The enhancer/summary path uses its own provider, configured separately in the admin console under System settings → Retrieval configuration.
 
 ## Quick start
 

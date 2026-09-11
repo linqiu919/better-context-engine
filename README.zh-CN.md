@@ -44,7 +44,9 @@ ACE 兼容的代码上下文检索引擎（Go）。实时索引代码库，为 A
 
 ![账户设置](.github/assets/bce-account.png)
 
-## 默认模型
+## 模型配置
+
+### 出厂默认
 
 | 通路 | 默认模型 | 说明 |
 | --- | --- | --- |
@@ -52,7 +54,18 @@ ACE 兼容的代码上下文检索引擎（Go）。实时索引代码库，为 A
 | 重排 | `Qwen/Qwen3-Reranker-8B` | Jina/Cohere 兼容 `/rerank` |
 | 提示增强 | `Qwen/Qwen3.5-9B` | OpenAI chat 协议 |
 
-默认端点为硅基流动（`api.siliconflow.cn/v1`），一个 `MODEL_API_KEY` 覆盖三条通路；均可经环境变量或管理员控制台改为本地服务（ollama/vLLM）。不配模型时检索仅走词法/结构两路。
+默认端点为硅基流动（`api.siliconflow.cn/v1`），一个 `MODEL_API_KEY` 覆盖三条通路，开箱即用；均可经环境变量或管理员控制台改为本地服务（ollama/vLLM）。不配模型时检索仅走词法/结构两路。
+
+### 推荐配置（官方实例同款）
+
+| 通路 | 模型 | 提供方 |
+| --- | --- | --- |
+| Embedding | `voyage-code-4`（1024 维） | Voyage AI |
+| 重排 | `rerank-2.5`（Top-K 50） | Voyage AI |
+| 提示增强 | `Qwen/Qwen3.5-9B` | 硅基流动 |
+| 代码摘要 | `Qwen/Qwen3-8B` | 硅基流动 |
+
+Voyage 的代码专用嵌入与重排模型在代码检索场景表现更好（嵌入与重排共用 `https://api.voyageai.com/v1` 端点和 Key，query/document 非对称经 `input_type` 自动处理）。增强与摘要走独立提供方，在管理后台「系统设置 → 检索设置」分别配置即可。
 
 ## 快速开始
 
