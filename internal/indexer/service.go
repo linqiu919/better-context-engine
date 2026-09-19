@@ -779,10 +779,10 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 		decomposeCh = s.startDecompose(ctx, query)
 	}
 	// Queries with segments in spaceless scripts tokenize into opaque blobs
-	// the lexical/structural paths can't use; the term expansion (English
-	// identifiers the code would contain) starts now, concurrently with
-	// everything below, and folds in before the first rerank.
-	var expandCh <-chan []string
+	// the lexical/structural paths can't use; expansion starts concurrently
+	// with everything below. Terms feed recall, while a faithful English
+	// restatement preserves the query's operations and scope for reranking.
+	var expandCh <-chan queryExpansion
 	if needsTermExpansion(query) {
 		expandCh = s.startTermExpand(ctx, query)
 	}
@@ -821,14 +821,14 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 	// expandTermWait has usually already elapsed. Past the cap (or the
 	// remaining global budget) the pipeline continues; a late arrival still
 	// folds in at the broad-mode stage below.
-	var expandTerms []string
+	var expansion queryExpansion
 	if expandCh != nil {
 		wait := min(expandTermWait, time.Until(deadline)-finishReserve)
 		select {
-		case expandTerms = <-expandCh:
+		case expansion = <-expandCh:
 			expandCh = nil // single write; a second receive would hang
-			if len(expandTerms) > 0 {
-				s.fuseExpandedTerms(ctx, candidates, expandTerms, fused)
+			if len(expansion.Terms) > 0 {
+				s.fuseExpandedTerms(ctx, candidates, expansion.Terms, fused)
 			}
 		case <-time.After(max(wait, 0)):
 		}
@@ -858,20 +858,29 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 		applyManifestPrior()
 	}
 	order := buildOrder(candidates, fused)
-	// The cross-encoder shares the bi-encoder's cross-lingual blind spot: a
-	// spaceless-script query against English-identifier code can score near
-	// zero on exactly the right chunks while literal English fragments
-	// ("database" in a comment) score high. Whenever the expansion terms are
-	// already in hand they join every rerank as one extra parallel query under
-	// the existing per-document maximum — vocabulary in the documents' own
-	// language, at zero added wait.
+	// Preserve the cross-lingual rerank view, but never score a bare keyword
+	// bag as if it were equivalent to the question when a faithful restatement
+	// exists: per-document max could otherwise promote a field mention over
+	// the operation being sought. The original text stays in the additional
+	// view so exact identifiers, exclusions and boundaries remain visible.
+	// Fallback order: restatement > keyword bag > nothing — a failed
+	// restatement (malformed JSON, truncation) must not reopen the
+	// cross-lingual blind spot the expansion exists to close.
 	expandQueries := func(base []string) []string {
-		if len(expandTerms) == 0 {
+		switch {
+		case expansion.RerankQuery != "":
+			expandedQuery := "Original query (preserve all constraints):\n" + query +
+				"\n\nEnglish restatement of the same query:\n" + expansion.RerankQuery
+			return append(append([]string(nil), base...), expandedQuery)
+		case len(expansion.Terms) > 0:
+			// Legacy behavior, kept only as the degraded path: English
+			// vocabulary for the reranker beats no English view at all.
+			return append(append([]string(nil), base...), strings.Join(expansion.Terms, " "))
+		default:
 			return base
 		}
-		return append(append([]string(nil), base...), strings.Join(expandTerms, " "))
 	}
-	// First pass: rerank against the original query (plus expansion terms when
+	// First pass: rerank against the original query (plus its restatement when
 	// available). A strong head score means a chunk directly answers the query
 	// — the focused pipeline stands unchanged. A weak head means the answer is
 	// spread across the codebase (or absent), so retrieval re-runs in broad
@@ -913,10 +922,10 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 		// still never worth blocking on if it isn't.
 		if expandCh != nil {
 			select {
-			case expandTerms = <-expandCh:
+			case expansion = <-expandCh:
 				expandCh = nil
-				if len(expandTerms) > 0 {
-					s.fuseExpandedTerms(ctx, candidates, expandTerms, fused)
+				if len(expansion.Terms) > 0 {
+					s.fuseExpandedTerms(ctx, candidates, expansion.Terms, fused)
 				}
 			default:
 			}
@@ -961,8 +970,8 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 		for _, sub := range subQueries {
 			skelTerms = append(skelTerms, tokens(sub)...)
 		}
-		if len(expandTerms) > 0 {
-			skelTerms = append(skelTerms, tokens(strings.Join(expandTerms, " "))...)
+		if len(expansion.Terms) > 0 {
+			skelTerms = append(skelTerms, tokens(strings.Join(expansion.Terms, " "))...)
 		}
 		for i := range hits {
 			hits[i].Content = skeletonize(hits[i].Path, hits[i].StartLine, hits[i].Content, skelTerms)
