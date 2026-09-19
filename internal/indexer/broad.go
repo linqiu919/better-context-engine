@@ -31,6 +31,12 @@ const (
 
 	broadMaxHits    = 24
 	broadPerFileCap = 2
+	// First-pass rerank winners keep two privileges through a broad re-run:
+	// pinned into the second rerank window (fused mass measures breadth, not
+	// direct relevance, so the rebuild could push them out of the head), and
+	// exempt from skeletonization — trimming the head is what used to turn a
+	// top-ranked answer into an imports-only stub.
+	broadProtectHits = 3
 
 	manifestBoostScore = 3.0
 

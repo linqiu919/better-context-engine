@@ -894,8 +894,13 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 	if decomposeCh != nil {
 		firstBudget -= rerankRoom
 	}
-	order, rerankTop, reranked := s.applyRerank(ctx, query, expandQueries(nil), candidates, order, false, firstBudget)
-	broad := rerankTop < broadEngageTop
+	order, rerankTop, steep, reranked := s.applyRerank(ctx, query, expandQueries(nil), candidates, order, false, firstBudget)
+	// A weak head alone no longer engages broad mode: a cliff-shaped head
+	// (steep) means a few chunks directly answer a focused question whose
+	// absolute scores just run low — wiring questions in a repo saturated
+	// with the query's vocabulary, typically cross-lingual. Rebuilding the
+	// order and skeletonizing would push exactly those chunks out.
+	broad := rerankTop < broadEngageTop && !steep
 	if !reranked {
 		broad = queryLooksBroad(query)
 	}
@@ -906,6 +911,16 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 		// (first-pass truncation is void), and the rerank re-runs against the
 		// original query plus every sub-query in parallel, keeping the
 		// per-document maximum.
+		//
+		// The rebuild re-sorts purely by fused (RRF) mass, which measures
+		// breadth; the chunks that directly answered the query in the first
+		// pass may hold little of it. They get pinned back into the head so
+		// the second rerank window is guaranteed to re-score them — under
+		// per-document max they keep their slots only by winning again.
+		var firstHead []int
+		if reranked {
+			firstHead = append(firstHead, order[:min(broadProtectHits, len(order))]...)
+		}
 		if decomposeCh == nil {
 			decomposeCh = s.startDecompose(ctx, query)
 		}
@@ -934,8 +949,8 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 			applyManifestPrior()
 		}
 		s.fuseSubQueries(ctx, candidates, subQueries, fused)
-		order = buildOrder(candidates, fused)
-		if o, top, ok := s.applyRerank(ctx, query, expandQueries(subQueries), candidates, order, true, time.Until(deadline)-finishReserve); ok {
+		order = pinHead(buildOrder(candidates, fused), firstHead)
+		if o, top, _, ok := s.applyRerank(ctx, query, expandQueries(subQueries), candidates, order, true, time.Until(deadline)-finishReserve); ok {
 			order, rerankTop, reranked = o, top, ok
 		}
 	}
@@ -974,6 +989,12 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 			skelTerms = append(skelTerms, tokens(strings.Join(expansion.Terms, " "))...)
 		}
 		for i := range hits {
+			// The head keeps full excerpts even in broad mode: when the best
+			// answer is a single function, its trimmed skeleton (head lines +
+			// term hits) is exactly the part that reads like imports.
+			if i < broadProtectHits {
+				continue
+			}
 			hits[i].Content = skeletonize(hits[i].Path, hits[i].StartLine, hits[i].Content, skelTerms)
 		}
 	}
@@ -1264,6 +1285,28 @@ func buildOrder(candidates []*candidate, fused map[int]float64) []int {
 		return fused[a] > fused[b]
 	})
 	return order
+}
+
+// pinHead moves the pinned indices (first-pass rerank winners) to the front
+// of order, preserving their relative ranking and everyone else's. The pinned
+// entries are always present somewhere in order — fused only gains entries
+// between the passes — so this is a reorder, never an insertion of strangers.
+func pinHead(order []int, pinned []int) []int {
+	if len(pinned) == 0 {
+		return order
+	}
+	isPinned := make(map[int]bool, len(pinned))
+	for _, idx := range pinned {
+		isPinned[idx] = true
+	}
+	out := make([]int, 0, len(order))
+	out = append(out, pinned...)
+	for _, idx := range order {
+		if !isPinned[idx] {
+			out = append(out, idx)
+		}
+	}
+	return out
 }
 
 // rankBy returns candidate indices with score > 0, best first, capped at

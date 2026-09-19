@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -96,6 +97,13 @@ const (
 	// many files (exploratory question) or absent. Sits well above
 	// rerankWeakTop — the moderate band prefers wider candidate coverage.
 	broadEngageTop = 0.50
+	// A weak head alone is not evidence of an exploratory question: wiring
+	// queries in a vocabulary-saturated repo (typically cross-lingual) score
+	// low in absolute terms even though a handful of chunks clearly answer
+	// them. A relevance cliff right after the top results vetoes broad mode;
+	// only a weak AND flat head reads as "the answer is spread out".
+	broadShapeRank = 6   // head position whose score defines the cliff
+	broadFlatRatio = 0.5 // flat when head[broadShapeRank] >= top * this
 )
 
 type rerankResult struct {
@@ -144,32 +152,34 @@ func rerankDocuments(ctx context.Context, cfg RerankConfig, query string, docs [
 
 // applyRerank reorders the head of the fused ranking by cross-encoder
 // relevance and returns the (possibly truncated) order plus the head score.
+// steep reports a cliff-shaped head (see broadShapeRank): a focused answer
+// with weak absolute calibration, which the caller must not send broad.
 // reranked is false whenever the cross-encoder did not run, in which case
-// topScore carries no signal. Failures never break search: the fused order
-// stands and the reranker is put on cooldown like the embedding path.
+// topScore and steep carry no signal. Failures never break search: the fused
+// order stands and the reranker is put on cooldown like the embedding path.
 //
 // Broad queries score each document against the original query AND every
 // sub-query in parallel, keeping the per-document maximum: a manifest that
 // looks irrelevant next to "overall frontend style" scores high against the
 // "package.json dependencies ui framework" sub-query, and a single-query
 // cutoff would silently re-drop exactly the coverage decomposition added.
-func (s *Service) applyRerank(ctx context.Context, query string, subQueries []string, candidates []*candidate, order []int, broad bool, budget time.Duration) (kept []int, topScore float64, reranked bool) {
+func (s *Service) applyRerank(ctx context.Context, query string, subQueries []string, candidates []*candidate, order []int, broad bool, budget time.Duration) (kept []int, topScore float64, steep bool, reranked bool) {
 	cfg := s.rerankConfig(ctx)
 	if !cfg.enabled() || len(order) == 0 {
-		return order, 0, false
+		return order, 0, false, false
 	}
 	// budget is what the search latency budget can spare for this round; the
 	// TTL stays the ceiling. A round with almost no time left is not worth
 	// firing — falling back to the fused order beats a guaranteed timeout.
 	budget = min(budget, rerankTTL)
 	if budget < rerankMinBudget {
-		return order, 0, false
+		return order, 0, false, false
 	}
 	s.embedMu.Lock()
 	down := time.Now().Before(s.rerankDownUntil)
 	s.embedMu.Unlock()
 	if down {
-		return order, 0, false
+		return order, 0, false, false
 	}
 	topK := min(cfg.TopK, len(order))
 	docs := make([]string, topK)
@@ -226,7 +236,7 @@ func (s *Service) applyRerank(ctx context.Context, query string, subQueries []st
 			s.rerankDownUntil = time.Now().Add(rerankCooldown)
 			s.embedMu.Unlock()
 		}
-		return order, 0, false
+		return order, 0, false, false
 	}
 	head := append([]int(nil), order[:topK]...)
 	for i, idx := range head {
@@ -244,7 +254,23 @@ func (s *Service) applyRerank(ctx context.Context, query string, subQueries []st
 	// count stops the truncation from starving the answer either way.
 	top := candidates[head[0]].rerank
 	if top <= 0 {
-		return order, top, true
+		return order, top, false, true
+	}
+	// Head shape, computed before the cutoff so truncation cannot hide it:
+	// a cliff shortly after the top result means a few chunks directly answer
+	// the query. Only meaningful above the no-answer band; a short head (fewer
+	// reranked docs than the shape rank) is concentrated by construction.
+	steep = top >= rerankWeakTop
+	if steep && len(head) > broadShapeRank {
+		steep = candidates[head[broadShapeRank]].rerank < top*broadFlatRatio
+	}
+	if !broad {
+		shape := 0.0
+		if len(head) > broadShapeRank {
+			shape = candidates[head[broadShapeRank]].rerank
+		}
+		// Tuning data for broadShapeRank/broadFlatRatio; remove once settled.
+		slog.Info("rerank head shape", "top", top, "shape_score", shape, "steep", steep)
 	}
 	ratio, floor, minKeep := rerankCutoffRatio, rerankFloorScore, rerankMinKeep
 	if broad {
@@ -286,7 +312,7 @@ func (s *Service) applyRerank(ctx context.Context, query string, subQueries []st
 		keep--
 	}
 	if keep < topK {
-		return order[:keep], top, true
+		return order[:keep], top, steep, true
 	}
-	return order, top, true
+	return order, top, steep, true
 }

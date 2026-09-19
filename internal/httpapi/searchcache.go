@@ -28,10 +28,11 @@ type searchCacheEntry struct {
 	Tokens    int64  `json:"t"`
 }
 
-// Bump when retrieval semantics change so old keyword-only rerank results
-// cannot hide the constraint-preserving expansion for another six hours.
+// Bump when retrieval semantics change so stale results cannot hide the new
+// behavior for another six hours. v2: cliff-shaped rerank heads stay focused
+// instead of engaging broad mode, and broad answers keep full head excerpts.
 // The same key also isolates the single-flight group used by aceSearch.
-const searchCacheRevision = "intent-expansion-v1"
+const searchCacheRevision = "broad-shape-v2"
 
 func searchCacheKey(checkpointID, query string, maxOutput int) string {
 	h := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d|%s", searchCacheRevision, checkpointID, maxOutput, query)))
