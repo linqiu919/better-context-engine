@@ -11,6 +11,7 @@
   "dependencies": {
     "@geist-ui/core": "^2.3.8",
     "@geist-ui/icons": "^1.0.2",
+    "force-graph": "^1.51.4",
     "react": "^17.0.2",
     "react-dom": "^17.0.2",
     "recharts": "^2.15.4"

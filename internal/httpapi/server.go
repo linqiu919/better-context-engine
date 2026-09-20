@@ -95,6 +95,7 @@ func New(cfg config.Config, st store.Store, authService *auth.Service, idx *inde
 	api.HandleFunc("POST /api/v1/me/ace-token", s.generateACEToken)
 	api.HandleFunc("GET /api/v1/me/ace-token", s.currentACEToken)
 	api.HandleFunc("GET /api/v1/me/ace-projects", s.myACEProjects)
+	api.HandleFunc("GET /api/v1/me/ace-projects/{name}/graph", s.myACEProjectGraph)
 	api.HandleFunc("DELETE /api/v1/me/ace-projects/{name}", s.deleteMyACEProject)
 	api.HandleFunc("GET /api/v1/me/ace-usage", s.myACEUsage)
 	api.HandleFunc("GET /api/v1/me/quota", s.meQuota)
@@ -546,6 +547,64 @@ func (s *Server) myACEProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"projects": projects})
+}
+
+// Graph responses cache per snapshot ID: snapshots are content-addressed, so
+// the same snapshot always yields the same graph and never needs invalidation
+// — the TTL only bounds Redis memory. First build pays a full content scan.
+const graphCacheTTL = 72 * time.Hour
+
+func graphCacheKey(snapshotID string) string {
+	return redisKeyPrefix + "graph:v1:" + snapshotID
+}
+
+func (s *Server) myACEProjectGraph(w http.ResponseWriter, r *http.Request) {
+	user := currentUser(r)
+	project, err := s.indexer.ACEProjectByName(r.Context(), user.ID, r.PathValue("name"))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, 404, "project not found")
+			return
+		}
+		writeError(w, 500, err.Error())
+		return
+	}
+	if project.SnapshotID == "" {
+		writeError(w, 409, "project is still uploading; try again once indexing starts")
+		return
+	}
+	key := graphCacheKey(project.SnapshotID)
+	if s.redisUsable() {
+		rctx, cancel := redisCtx(r.Context())
+		raw, err := s.redis.Get(rctx, key).Result()
+		cancel()
+		if err == nil && raw != "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(raw))
+			return
+		}
+	}
+	graph, err := s.indexer.BuildProjectGraph(r.Context(), project.SnapshotID)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	payload, err := json.Marshal(graph)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if s.redisUsable() {
+		rctx, cancel := redisCtx(context.WithoutCancel(r.Context()))
+		if err := s.redis.Set(rctx, key, payload, graphCacheTTL).Err(); err != nil {
+			s.noteRedisError("graph-cache", err)
+		}
+		cancel()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, _ = w.Write(payload)
 }
 
 func (s *Server) deleteMyACEProject(w http.ResponseWriter, r *http.Request) {
