@@ -10,3 +10,7 @@ export const clock=(v:number,language:Language)=>new Intl.DateTimeFormat(languag
 // maskToken hides the middle 16 characters of the personal token; the copy
 // button still writes the full plaintext to the clipboard.
 export const maskToken=(v:string)=>{if(v.length<=20)return v;const keep=v.length-16,front=Math.ceil(keep/2);return `${v.slice(0,front)}${'•'.repeat(16)}${v.slice(front+16)}`}
+
+// projectLabel is how a console project row is named in prose: the bare
+// name, or "name (branch)" once a git-aware client reported the branch.
+export const projectLabel=(name:string,branch?:string)=>branch?`${name} (${branch})`:name

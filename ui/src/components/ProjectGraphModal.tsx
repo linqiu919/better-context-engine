@@ -4,6 +4,7 @@ import { ArrowLeft, Maximize2, Minimize2, Minus, Plus, Target, X } from '@geist-
 import { api } from '../api'
 import type { GraphEdge, GraphNode, ProjectGraph } from '../types'
 import { useI18n } from '../i18n'
+import { projectLabel } from '../lib/format'
 
 // ProjectGraphModal renders a project's relation graph. The default canvas
 // aggregates symbols into files; clicking a file drills into its symbols
@@ -89,7 +90,7 @@ function GraphLoading() {
   </div>
 }
 
-export default function ProjectGraphModal({project, onClose}: {project: string; onClose: () => void}) {
+export default function ProjectGraphModal({project, branch, onClose}: {project: string; branch?: string; onClose: () => void}) {
   const {t} = useI18n()
   const [graph, setGraph] = useState<ProjectGraph|null>(null)
   const [error, setError] = useState('')
@@ -109,11 +110,11 @@ export default function ProjectGraphModal({project, onClose}: {project: string; 
 
   useEffect(() => {
     let alive = true
-    api<ProjectGraph>(`/api/v1/me/ace-projects/${encodeURIComponent(project)}/graph`)
+    api<ProjectGraph>(`/api/v1/me/ace-projects/${encodeURIComponent(project)}/graph${branch ? `?branch=${encodeURIComponent(branch)}` : ''}`)
       .then(g => {if (alive) setGraph(g)})
       .catch(e => {if (alive) setError((e as Error).message)})
     return () => {alive = false}
-  }, [project])
+  }, [project, branch])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -200,7 +201,7 @@ export default function ProjectGraphModal({project, onClose}: {project: string; 
       <header className="graph-head">
         <div className="graph-title">
           <span className="graph-eyebrow">{t('Relation graph')}</span>
-          <strong>{showBack && viewingFile ? baseName(viewingFile) : project}</strong>
+          <strong>{showBack && viewingFile ? baseName(viewingFile) : projectLabel(project, branch)}</strong>
           {stats && <span className="graph-stats">{stats}</span>}
         </div>
         <div className="graph-controls">

@@ -957,6 +957,21 @@ code::after {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Branch line under a project name (git-aware clients) and the linked-worktree pill. */
+.repo-name small.repo-meta { display: flex; align-items: center; gap: 4px; }
+.repo-name small.repo-meta svg { flex: 0 0 auto; }
+.repo-name small.repo-meta > span { overflow: hidden; text-overflow: ellipsis; }
+.worktree-badge {
+  flex: 0 0 auto;
+  margin-left: 2px;
+  padding: 0 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  font: 600 9px/1.5 var(--font-mono);
+  color: var(--muted);
+  background: var(--surface-2);
+  letter-spacing: .04em;
+}
 .repo-icon {
   width: 28px;
   height: 28px;

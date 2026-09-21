@@ -1050,54 +1050,92 @@ func (p *Postgres) UserOwnsSnapshot(ctx context.Context, userID, snapshotID stri
 		OR EXISTS(SELECT 1 FROM user_checkpoints WHERE user_id=$1 AND snapshot_id=$2)`, userID, snapshotID).Scan(&owned)
 	return owned, err
 }
-func (p *Postgres) SaveACEProject(ctx context.Context, userID, name, snapshotID string) error {
-	_, err := p.db.ExecContext(ctx, `INSERT INTO user_ace_projects(user_id,project_name,snapshot_id,updated_at) VALUES($1,$2,$3,$4) ON CONFLICT(user_id,project_name) DO UPDATE SET snapshot_id=EXCLUDED.snapshot_id, updated_at=EXCLUDED.updated_at`, userID, name, snapshotID, time.Now())
+func (p *Postgres) SaveACEProject(ctx context.Context, userID string, ref domain.ACEProjectRef) error {
+	_, err := p.db.ExecContext(ctx, `INSERT INTO user_ace_projects(user_id,project_name,branch,worktree,snapshot_id,updated_at) VALUES($1,$2,$3,$4,$5,$6)
+		ON CONFLICT(user_id,project_name,branch) DO UPDATE SET snapshot_id=EXCLUDED.snapshot_id, worktree=EXCLUDED.worktree, updated_at=EXCLUDED.updated_at`,
+		userID, ref.Name, ref.Branch, ref.Worktree, ref.SnapshotID, time.Now())
 	return err
 }
-func (p *Postgres) EnsureACEProject(ctx context.Context, userID, name string) (bool, error) {
-	r, err := p.db.ExecContext(ctx, `INSERT INTO user_ace_projects(user_id,project_name,snapshot_id,updated_at) VALUES($1,$2,'',$3) ON CONFLICT(user_id,project_name) DO NOTHING`, userID, name, time.Now())
+func (p *Postgres) EnsureACEProject(ctx context.Context, userID string, ref domain.ACEProjectRef) (bool, error) {
+	r, err := p.db.ExecContext(ctx, `INSERT INTO user_ace_projects(user_id,project_name,branch,worktree,snapshot_id,updated_at) VALUES($1,$2,$3,$4,'',$5) ON CONFLICT(user_id,project_name,branch) DO NOTHING`,
+		userID, ref.Name, ref.Branch, ref.Worktree, time.Now())
 	if err != nil {
 		return false, err
 	}
 	n, _ := r.RowsAffected()
 	return n > 0, nil
 }
-func (p *Postgres) ACEProjectRefs(ctx context.Context, userID string) (map[string]string, error) {
-	rows, err := p.db.QueryContext(ctx, `SELECT project_name, snapshot_id FROM user_ace_projects WHERE user_id=$1`, userID)
+func (p *Postgres) ACEProjectRefs(ctx context.Context, userID string) ([]domain.ACEProjectRef, error) {
+	rows, err := p.db.QueryContext(ctx, `SELECT project_name, branch, worktree, snapshot_id FROM user_ace_projects WHERE user_id=$1 ORDER BY project_name, branch`, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	refs := map[string]string{}
+	refs := []domain.ACEProjectRef{}
 	for rows.Next() {
-		var name, snapshotID string
-		if err := rows.Scan(&name, &snapshotID); err != nil {
+		var ref domain.ACEProjectRef
+		if err := rows.Scan(&ref.Name, &ref.Branch, &ref.Worktree, &ref.SnapshotID); err != nil {
 			return nil, err
 		}
-		refs[name] = snapshotID
+		refs = append(refs, ref)
 	}
 	return refs, rows.Err()
 }
-func (p *Postgres) DeleteACEProject(ctx context.Context, userID, name string) error {
-	_, err := p.db.ExecContext(ctx, `DELETE FROM user_ace_projects WHERE user_id=$1 AND project_name=$2`, userID, name)
+func (p *Postgres) DeleteACEProject(ctx context.Context, userID, name, branch string) error {
+	_, err := p.db.ExecContext(ctx, `DELETE FROM user_ace_projects WHERE user_id=$1 AND project_name=$2 AND branch=$3`, userID, name, branch)
 	return err
 }
-func (p *Postgres) PurgeACEProject(ctx context.Context, userID, name string) error {
+func (p *Postgres) UserHeldBlobNames(ctx context.Context, userID string, names []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(names) == 0 {
+		return out, nil
+	}
+	rows, err := p.db.QueryContext(ctx, `SELECT DISTINCT sb.blob_name FROM snapshot_blobs sb
+		JOIN user_ace_projects up ON up.snapshot_id=sb.snapshot_id
+		WHERE up.user_id=$1 AND sb.blob_name = ANY($2)`, userID, names)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out[name] = true
+	}
+	return out, rows.Err()
+}
+func (p *Postgres) RenameACEJobs(ctx context.Context, userID, from, to string) error {
+	_, err := p.db.ExecContext(ctx, `UPDATE index_jobs SET repository_name=$3 WHERE owner_id=$1 AND repository_name=$2 AND repository_id=''`, userID, from, to)
+	return err
+}
+// UserStorageBytes measures ciphertext at rest over the distinct blob set of
+// the user's project snapshots (same octet_length measure as snapshot_stats);
+// TOAST reports the size without detoasting, so this stays a metadata scan.
+func (p *Postgres) UserStorageBytes(ctx context.Context, userID string) (int64, error) {
+	var total int64
+	err := p.db.QueryRowContext(ctx, `SELECT coalesce(sum(octet_length(b.content)),0) FROM blobs b
+		WHERE EXISTS (SELECT 1 FROM snapshot_blobs sb JOIN user_ace_projects up ON up.snapshot_id=sb.snapshot_id
+			WHERE up.user_id=$1 AND sb.blob_name=b.name)`, userID).Scan(&total)
+	return total, err
+}
+func (p *Postgres) PurgeACEProject(ctx context.Context, userID, name, branch string) error {
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 	var snapID string
-	if err := tx.QueryRowContext(ctx, `SELECT snapshot_id FROM user_ace_projects WHERE user_id=$1 AND project_name=$2`, userID, name).Scan(&snapID); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT snapshot_id FROM user_ace_projects WHERE user_id=$1 AND project_name=$2 AND branch=$3`, userID, name, branch).Scan(&snapID); err != nil {
 		return mapSQLError(err)
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM user_ace_projects WHERE user_id=$1 AND project_name=$2`, userID, name); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM user_ace_projects WHERE user_id=$1 AND project_name=$2 AND branch=$3`, userID, name, branch); err != nil {
 		return err
 	}
 	// ACE activity jobs carry no repository row; the empty repository_id
 	// guard keeps legacy repo jobs with a same-named repository alive.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM index_jobs WHERE owner_id=$1 AND repository_name=$2 AND repository_id=''`, userID, name); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM index_jobs WHERE owner_id=$1 AND repository_name=$2 AND repository_id=''`, userID, domain.ACEProjectLabel(name, branch)); err != nil {
 		return err
 	}
 	// One statement resolves the deletable set and removes it. "doomed" =
@@ -1168,7 +1206,7 @@ func (p *Postgres) listACEProjects(ctx context.Context, userID, modelID string) 
 		filter = ` WHERE p.user_id=$1`
 		args = append(args, userID)
 	}
-	rows, err := p.db.QueryContext(ctx, `SELECT p.user_id, u.username, p.project_name, p.snapshot_id, p.updated_at
+	rows, err := p.db.QueryContext(ctx, `SELECT p.user_id, u.username, p.project_name, p.branch, p.worktree, p.snapshot_id, p.updated_at
 		FROM user_ace_projects p JOIN users u ON u.id=p.user_id`+filter+` ORDER BY p.updated_at DESC`, args...)
 	if err != nil {
 		return nil, err
@@ -1179,7 +1217,7 @@ func (p *Postgres) listACEProjects(ctx context.Context, userID, modelID string) 
 	seen := map[string]bool{}
 	for rows.Next() {
 		var pr domain.ACEProject
-		if err := rows.Scan(&pr.OwnerID, &pr.OwnerUsername, &pr.Name, &pr.SnapshotID, &pr.UpdatedAt); err != nil {
+		if err := rows.Scan(&pr.OwnerID, &pr.OwnerUsername, &pr.Name, &pr.Branch, &pr.Worktree, &pr.SnapshotID, &pr.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if pr.SnapshotID != "" && !seen[pr.SnapshotID] {
@@ -1678,7 +1716,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users(email) WHERE email
 CREATE UNIQUE INDEX IF NOT EXISTS users_linuxdo_id_unique ON users(linuxdo_id) WHERE linuxdo_id <> 0;
 CREATE UNIQUE INDEX IF NOT EXISTS users_ace_token_idx ON users(ace_token_hash) WHERE ace_token_hash <> '';
 CREATE TABLE IF NOT EXISTS user_checkpoints (user_id text PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, snapshot_id text NOT NULL, updated_at timestamptz NOT NULL);
-CREATE TABLE IF NOT EXISTS user_ace_projects (user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, project_name text NOT NULL, snapshot_id text NOT NULL, updated_at timestamptz NOT NULL, PRIMARY KEY(user_id,project_name));
+CREATE TABLE IF NOT EXISTS user_ace_projects (user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE, project_name text NOT NULL, branch text NOT NULL DEFAULT '', worktree boolean NOT NULL DEFAULT false, snapshot_id text NOT NULL, updated_at timestamptz NOT NULL, PRIMARY KEY(user_id,project_name,branch));
+ALTER TABLE user_ace_projects ADD COLUMN IF NOT EXISTS branch text NOT NULL DEFAULT '';
+ALTER TABLE user_ace_projects ADD COLUMN IF NOT EXISTS worktree boolean NOT NULL DEFAULT false;
+-- Pre-branch deployments keyed rows by (user, name); widen the key once so
+-- sibling branches/worktrees of one repository get their own rows. The
+-- table holds one row per project, so the key rebuild is instantaneous.
+DO $$ BEGIN
+	IF (SELECT count(*) FROM information_schema.key_column_usage WHERE table_name='user_ace_projects' AND constraint_name='user_ace_projects_pkey') = 2 THEN
+		ALTER TABLE user_ace_projects DROP CONSTRAINT user_ace_projects_pkey, ADD PRIMARY KEY(user_id,project_name,branch);
+	END IF;
+END $$;
 ALTER TABLE index_jobs DROP CONSTRAINT IF EXISTS index_jobs_repository_id_fkey;
 CREATE TABLE IF NOT EXISTS ace_usage (user_id text NOT NULL, day date NOT NULL, endpoint text NOT NULL, calls bigint NOT NULL DEFAULT 0, units bigint NOT NULL DEFAULT 0, PRIMARY KEY(user_id,day,endpoint));
 CREATE TABLE IF NOT EXISTS user_quota_usage (user_id text NOT NULL, day date NOT NULL, kind text NOT NULL, used bigint NOT NULL DEFAULT 0, PRIMARY KEY(user_id,day,kind));

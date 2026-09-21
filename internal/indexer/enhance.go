@@ -90,7 +90,22 @@ func (s *Service) enhanceConfig(ctx context.Context) EnhanceConfig {
 // user's own last-resolved checkpoint when the caller used a personal ACE
 // token, otherwise the globally most recent snapshot (shared-token /
 // single-tenant behavior).
-func (s *Service) contextSnapshot(ctx context.Context, userID string) (domain.Snapshot, error) {
+func (s *Service) contextSnapshot(ctx context.Context, userID string, ws WorkspaceMeta) (domain.Snapshot, error) {
+	// A git-aware client names the workspace it is enhancing from; use that
+	// project's own checkpoint so a sibling worktree's last search does not
+	// supply the context. Falls through to the user's latest checkpoint when
+	// the row is unknown or still uploading.
+	if userID != "" && ws.Name != "" {
+		branch := ""
+		if ws.Git {
+			branch = clipName(ws.Branch)
+		}
+		if ref, err := s.ACEProjectRef(ctx, userID, clipName(ws.Name), branch); err == nil && ref.SnapshotID != "" {
+			if snapshot, err := s.store.SnapshotByID(ctx, ref.SnapshotID); err == nil {
+				return snapshot, nil
+			}
+		}
+	}
 	if userID != "" {
 		if id, err := s.store.UserCheckpoint(ctx, userID); err == nil {
 			if snapshot, err := s.store.SnapshotByID(ctx, id); err == nil {
@@ -129,13 +144,13 @@ Rules:
 // attributed checkpoint fall back to the globally most recent snapshot.
 // Retrieval failures degrade to enhancement without context; only a missing
 // configuration or a failing chat model returns an error.
-func (s *Service) EnhancePrompt(ctx context.Context, userID, prompt string, history []ChatTurn) (string, error) {
+func (s *Service) EnhancePrompt(ctx context.Context, userID string, ws WorkspaceMeta, prompt string, history []ChatTurn) (string, error) {
 	cfg := s.enhanceConfig(ctx)
 	if !cfg.enabled() {
 		return "", fmt.Errorf("prompt enhancer is not configured: set enhancer_url and enhancer_model")
 	}
 	contextBlock := ""
-	if snapshot, err := s.contextSnapshot(ctx, userID); err == nil && len(snapshot.BlobNames) > 0 {
+	if snapshot, err := s.contextSnapshot(ctx, userID, ws); err == nil && len(snapshot.BlobNames) > 0 {
 		if result, err := s.SearchBlobNames(ctx, prompt, snapshot.BlobNames, enhanceContextBudget); err == nil && len(result.Hits) > 0 {
 			contextBlock = result.FormattedRetrieval
 		}

@@ -72,15 +72,15 @@ type ProjectGraph struct {
 	SymbolCount int         `json:"symbol_count"`
 }
 
-// ACEProjectByName resolves one of the caller's projects (for the snapshot ID
-// the graph cache is keyed on).
-func (s *Service) ACEProjectByName(ctx context.Context, userID, name string) (domain.ACEProject, error) {
+// ACEProjectByName resolves one of the caller's project rows by (name,
+// branch) (for the snapshot ID the graph cache is keyed on).
+func (s *Service) ACEProjectByName(ctx context.Context, userID, name, branch string) (domain.ACEProject, error) {
 	projects, err := s.store.ListACEProjects(ctx, userID, s.embeddingConfig(ctx).Model)
 	if err != nil {
 		return domain.ACEProject{}, err
 	}
 	for _, p := range projects {
-		if p.Name == name {
+		if p.Name == name && p.Branch == branch {
 			return p, nil
 		}
 	}

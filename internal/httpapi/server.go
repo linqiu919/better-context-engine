@@ -86,6 +86,7 @@ func New(cfg config.Config, st store.Store, authService *auth.Service, idx *inde
 	mux.HandleFunc("GET /api/v1/auth/linuxdo", s.linuxdoStart)
 	mux.HandleFunc("GET /api/v1/auth/linuxdo/callback", s.linuxdoCallback)
 	mux.Handle("POST /batch-upload", s.aceAuth(http.HandlerFunc(s.batchUpload)))
+	mux.Handle("POST /blobs/missing", s.aceAuth(http.HandlerFunc(s.blobsMissing)))
 	mux.Handle("POST /agents/codebase-retrieval", s.aceAuth(http.HandlerFunc(s.aceSearch)))
 	mux.Handle("POST /prompt-enhancer", s.aceAuth(http.HandlerFunc(s.promptEnhance)))
 
@@ -329,10 +330,10 @@ func (s *Server) allowRPM(ctx context.Context, userID, kind string, limit int) b
 	return true
 }
 
-// userStorageBytes sums the storage of the user's archived ACE projects,
-// cached for a minute so upload bursts don't recompute snapshot aggregates
-// on every call. Deduplicated blobs mean the sum slightly overstates unique
-// storage across projects — acceptable for a ceiling check.
+// userStorageBytes is the deduplicated at-rest size of the user's archived
+// ACE projects, cached for a minute so upload bursts don't rescan blob sizes
+// on every call. Blobs shared by several rows (branches, worktrees) count
+// once, so keeping a repository's branches indexed costs their diff.
 func (s *Server) userStorageBytes(ctx context.Context, userID string) int64 {
 	if s.redisUsable() {
 		if total, handled := s.storageBytesRedis(ctx, userID); handled {
@@ -355,11 +356,9 @@ func (s *Server) userStorageBytes(ctx context.Context, userID string) int64 {
 
 // computeStorageBytes is the database truth behind both cache layers.
 func (s *Server) computeStorageBytes(ctx context.Context, userID string) int64 {
-	var total int64
-	if projects, err := s.indexer.ListACEProjects(ctx, userID); err == nil {
-		for _, p := range projects {
-			total += p.StorageBytes
-		}
+	total, err := s.store.UserStorageBytes(ctx, userID)
+	if err != nil {
+		return 0
 	}
 	return total
 }
@@ -560,7 +559,7 @@ func graphCacheKey(snapshotID string) string {
 
 func (s *Server) myACEProjectGraph(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
-	project, err := s.indexer.ACEProjectByName(r.Context(), user.ID, r.PathValue("name"))
+	project, err := s.indexer.ACEProjectByName(r.Context(), user.ID, r.PathValue("name"), r.URL.Query().Get("branch"))
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, 404, "project not found")
@@ -607,10 +606,12 @@ func (s *Server) myACEProjectGraph(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(payload)
 }
 
+// deleteMyACEProject purges one project row; ?branch= selects the row of a
+// git-aware client (empty for rows archived without branch tracking).
 func (s *Server) deleteMyACEProject(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
-	name := r.PathValue("name")
-	if err := s.indexer.PurgeACEProject(r.Context(), user.ID, name); err != nil {
+	name, branch := r.PathValue("name"), r.URL.Query().Get("branch")
+	if err := s.indexer.PurgeACEProject(r.Context(), user.ID, name, branch); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, 404, "project not found")
 			return
@@ -624,7 +625,7 @@ func (s *Server) deleteMyACEProject(w http.ResponseWriter, r *http.Request) {
 	s.dropStorageCache(r.Context(), user.ID)
 	s.clearQuotaBlock(r.Context(), user.ID)
 	_ = s.store.ClearQuotaUsageKind(r.Context(), user.ID, "upload_bytes")
-	s.audit(r.Context(), user, "ace_project.delete", "ace_project", name, "success", nil)
+	s.audit(r.Context(), user, "ace_project.delete", "ace_project", domain.ACEProjectLabel(name, branch), "success", nil)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -642,7 +643,8 @@ func (s *Server) batchUpload(w http.ResponseWriter, r *http.Request) {
 		// ProjectName (sent by bce-tool-rs) makes the project visible in the
 		// console while the first upload is still running; the canonical
 		// carrier for archival remains the retrieval request.
-		ProjectName string `json:"project_name"`
+		ProjectName string   `json:"project_name"`
+		Git         *gitMeta `json:"git"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -651,10 +653,27 @@ func (s *Server) batchUpload(w http.ResponseWriter, r *http.Request) {
 	// zero-retrieval upload streaks) is currently disabled by operator
 	// decision; re-enable by restoring the abuseUploadAllowed gate here.
 	// Measured in ciphertext units so the ceiling check compares like with
-	// like against the database-side storage totals.
+	// like against the database-side storage totals. Only content the caller
+	// does not already hold counts: blobs are content-addressed and shared,
+	// so a second worktree or a fresh clone of one's own indexed repository
+	// costs the diff, not the whole tree again (the ingest path skips the
+	// same names). "Hold" is per user on purpose — content another user
+	// uploaded still counts against this one's daily volume, otherwise
+	// re-uploading popular repositories would be free. A lookup failure
+	// degrades to charging everything.
+	hashes := make([]string, len(req.Blobs))
+	for i, blob := range req.Blobs {
+		hashes[i] = indexer.BlobName(blob.Path, blob.Content)
+	}
+	held, err := s.heldBlobNames(r, hashes)
+	if err != nil {
+		held = map[string]bool{}
+	}
 	var incoming int64
-	for _, blob := range req.Blobs {
-		incoming += store.EstimatedStoredSize(int64(len(blob.Content)))
+	for i, blob := range req.Blobs {
+		if !held[hashes[i]] {
+			incoming += store.EstimatedStoredSize(int64(len(blob.Content)))
+		}
 	}
 	if !s.enforceQuota(w, r, "upload", incoming) {
 		return
@@ -678,7 +697,7 @@ func (s *Server) batchUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	s.indexer.EnsureEmbeddingsAsync(names)
 	if user := currentUser(r); user.ID != "" {
-		s.indexer.EnsurePendingACEProject(r.Context(), user.ID, req.ProjectName)
+		s.indexer.EnsurePendingACEProject(r.Context(), user.ID, workspaceMeta(req.ProjectName, req.Git))
 	}
 	s.recordACEUsage(r, "upload", int64(len(names)))
 	s.bumpQuota(r, "upload")
@@ -688,6 +707,70 @@ func (s *Server) batchUpload(w http.ResponseWriter, r *http.Request) {
 	s.noteStoredBytes(r, incoming)
 	writeJSON(w, 200, map[string]any{"blob_names": names})
 }
+
+// gitMeta is the git block a git-aware bce-tool-rs client attaches to its
+// requests; its presence (not just its values) tells the archive that the
+// branch is tracked. Stock ACE clients and older builds omit it.
+type gitMeta struct {
+	Branch   string `json:"branch"`
+	Worktree bool   `json:"worktree"`
+}
+
+func workspaceMeta(name string, git *gitMeta) indexer.WorkspaceMeta {
+	ws := indexer.WorkspaceMeta{Name: name}
+	if git != nil {
+		ws.Git, ws.Branch, ws.Worktree = true, git.Branch, git.Worktree
+	}
+	return ws
+}
+
+// maxMissingProbe bounds one /blobs/missing request; a workspace manifest is
+// tens of thousands of names at most, and clients probe per indexing round.
+const maxMissingProbe = 50000
+
+// heldBlobNames is the caller's view of which blob names already exist:
+// per user (referenced by one of their own project snapshots) for
+// personal-token callers, store-wide for the shared token, which has no
+// owner and no quota. Upload accounting and the missing-blob probe share it
+// so what a client is told to skip is exactly what it is not charged for.
+func (s *Server) heldBlobNames(r *http.Request, names []string) (map[string]bool, error) {
+	if user := currentUser(r); user.ID != "" {
+		return s.store.UserHeldBlobNames(r.Context(), user.ID, names)
+	}
+	return s.store.ExistingBlobNames(r.Context(), names)
+}
+
+// blobsMissing tells a client which of its content-addressed blob names it
+// does not hold yet, so it can upload only those. A fresh worktree or clone
+// of one's own already-indexed repository then costs one manifest round trip
+// instead of re-sending the whole tree; the answer is advisory only — an
+// upload that skips a name the store later loses surfaces as a ghost blob
+// on the next retrieval, exactly as a rejected upload does today.
+func (s *Server) blobsMissing(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		BlobNames []string `json:"blob_names"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	if len(req.BlobNames) > maxMissingProbe {
+		writeError(w, http.StatusRequestEntityTooLarge, "too many blob names in one probe")
+		return
+	}
+	held, err := s.heldBlobNames(r, req.BlobNames)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	missing := make([]string, 0, len(req.BlobNames))
+	for _, name := range req.BlobNames {
+		if !held[name] {
+			missing = append(missing, name)
+		}
+	}
+	writeJSON(w, 200, map[string]any{"missing": missing})
+}
+
 func (s *Server) aceSearch(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		InformationRequest string `json:"information_request"`
@@ -702,9 +785,11 @@ func (s *Server) aceSearch(w http.ResponseWriter, r *http.Request) {
 		Commit    bool  `json:"enable_commit_retrieval"`
 		// ProjectName is a bce-tool-rs extension: the client's project folder
 		// name, sent with every retrieval so the archived ACE project carries
-		// (and follows renames of) the real workspace name. Absent from stock
-		// ACE clients.
-		ProjectName string `json:"project_name"`
+		// (and follows renames of) the real workspace name. Git (branch +
+		// worktree flag) comes from git-aware builds and keys sibling
+		// branches/worktrees apart. Both absent from stock ACE clients.
+		ProjectName string   `json:"project_name"`
+		Git         *gitMeta `json:"git"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -749,7 +834,7 @@ func (s *Server) aceSearch(w http.ResponseWriter, r *http.Request) {
 	// checkpoint archived as a named project for the console.
 	if user := currentUser(r); user.ID != "" {
 		_ = s.store.SetUserCheckpoint(r.Context(), user.ID, checkpointID)
-		s.indexer.ArchiveACEProject(r.Context(), user.ID, checkpointID, req.ProjectName, len(req.Blobs.Added), len(req.Blobs.Deleted))
+		s.indexer.ArchiveACEProject(r.Context(), user.ID, checkpointID, workspaceMeta(req.ProjectName, req.Git), len(req.Blobs.Added), len(req.Blobs.Deleted))
 		s.noteRetrievalUse(r.Context(), user.ID)
 	}
 	// Same workspace content + same question + same output cap = same answer:
@@ -827,6 +912,10 @@ func (s *Server) promptEnhance(w http.ResponseWriter, r *http.Request) {
 		ConversationID string             `json:"conversation_id"`
 		Model          string             `json:"model"`
 		Mode           string             `json:"mode"`
+		// bce-tool-rs extension: which archived project supplies the
+		// codebase context (see contextSnapshot); absent from stock clients.
+		ProjectName string   `json:"project_name"`
+		Git         *gitMeta `json:"git"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -845,7 +934,7 @@ func (s *Server) promptEnhance(w http.ResponseWriter, r *http.Request) {
 	if !s.enforceQuota(w, r, "enhance", 0) {
 		return
 	}
-	text, err := s.indexer.EnhancePrompt(r.Context(), currentUser(r).ID, prompt, req.ChatHistory)
+	text, err := s.indexer.EnhancePrompt(r.Context(), currentUser(r).ID, workspaceMeta(req.ProjectName, req.Git), prompt, req.ChatHistory)
 	if err != nil {
 		if strings.Contains(err.Error(), "not configured") {
 			writeError(w, http.StatusNotImplemented, err.Error())

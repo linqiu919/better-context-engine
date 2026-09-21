@@ -117,28 +117,43 @@ type Store interface {
 	// the user's archived projects or their latest checkpoint pointer — the
 	// retrieval-side ownership check for client-claimed checkpoint IDs.
 	UserOwnsSnapshot(context.Context, string, string) (bool, error)
-	// SaveACEProject archives (user, project name) -> snapshot so
-	// the console can list every project an ACE client has indexed;
-	// ListACEProjects returns them newest-first with stats computed against
-	// the given embedding model ID. ACEProjectRefs is the lightweight
-	// name -> snapshot map used by archival dedupe, and DeleteACEProject
-	// removes a row superseded by a rename/merge.
-	SaveACEProject(context.Context, string, string, string) error
+	// SaveACEProject archives (user, name, branch) -> snapshot so the console
+	// can list every project an ACE client has indexed; a same-key row is
+	// updated in place. ListACEProjects returns them newest-first with stats
+	// computed against the given embedding model ID. ACEProjectRefs is the
+	// lightweight identity list used by archival dedupe, and
+	// DeleteACEProject removes one (name, branch) row superseded by a merge.
+	SaveACEProject(context.Context, string, domain.ACEProjectRef) error
 	// EnsureACEProject inserts a placeholder project row (empty snapshot) so
 	// the console shows the project while its first upload is still running;
 	// it never touches an existing row. Returns whether a row was created.
-	EnsureACEProject(context.Context, string, string) (bool, error)
-	ACEProjectRefs(context.Context, string) (map[string]string, error)
-	DeleteACEProject(context.Context, string, string) error
-	// PurgeACEProject physically deletes a user's archived project: the
-	// pointer row, its ACE index-activity jobs, every checkpoint snapshot of
-	// the same workspace (blob overlap >= 0.5 with the project's snapshot,
-	// mirroring archival dedupe) that no surviving project row or other
-	// user's checkpoint still references, and any blobs left unreferenced
-	// afterwards (chunks/postings/embeddings go with them). Repository sync
-	// snapshots (repository_id set) are never touched. Returns ErrNotFound
-	// when the project row does not exist.
-	PurgeACEProject(context.Context, string, string) error
+	EnsureACEProject(context.Context, string, domain.ACEProjectRef) (bool, error)
+	ACEProjectRefs(context.Context, string) ([]domain.ACEProjectRef, error)
+	DeleteACEProject(context.Context, string, string, string) error
+	// PurgeACEProject physically deletes a user's archived project row
+	// (name, branch): the pointer row, its ACE index-activity jobs, every
+	// checkpoint snapshot of the same workspace (blob overlap >= 0.5 with the
+	// project's snapshot, mirroring archival dedupe) that no surviving
+	// project row or other user's checkpoint still references, and any blobs
+	// left unreferenced afterwards (chunks/postings/embeddings go with them).
+	// Sibling branch/worktree rows keep their snapshots and the blobs they
+	// share. Repository sync snapshots (repository_id set) are never
+	// touched. Returns ErrNotFound when the project row does not exist.
+	PurgeACEProject(context.Context, string, string, string) error
+	// UserHeldBlobNames reports which of the names are already referenced by
+	// one of the user's own project snapshots — the per-user view of
+	// ExistingBlobNames that upload accounting and the missing-blob probe
+	// use, so content another user uploaded still counts against this one.
+	UserHeldBlobNames(context.Context, string, []string) (map[string]bool, error)
+	// RenameACEJobs relabels the user's ACE index-activity jobs (no
+	// repository row) from one project label to another, keeping activity
+	// history attached when a branch-less row is upgraded to (name, branch).
+	RenameACEJobs(context.Context, string, string, string) error
+	// UserStorageBytes is the deduplicated at-rest size of everything the
+	// user's archived projects reference: blobs shared by several rows
+	// (branches, worktrees, checkpoint history) count once. This is the
+	// storage-ceiling truth; per-project sizes in ListACEProjects overlap.
+	UserStorageBytes(context.Context, string) (int64, error)
 	ListACEProjects(context.Context, string, string) ([]domain.ACEProject, error)
 	// ListAllACEProjects is the admin view: every user's archived projects,
 	// owner attribution included.

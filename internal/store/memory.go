@@ -36,7 +36,7 @@ type Memory struct {
 	annDismiss map[string]string // userID -> dismissed announcement ID
 	userCkpts  map[string]string
 	aceUsage   map[string]*domain.ACEUsage             // key: userID|day|endpoint
-	aceProjs   map[string]map[string]domain.ACEProject // userID -> project name -> archive
+	aceProjs   map[string]map[string]domain.ACEProject // userID -> aceKey(name, branch) -> archive
 	quotaUsage map[string]int64                        // key: userID|day|kind
 }
 
@@ -602,31 +602,85 @@ func (m *Memory) UserOwnsSnapshot(_ context.Context, userID, snapshotID string) 
 	}
 	return false, nil
 }
-func (m *Memory) ACEProjectRefs(_ context.Context, userID string) (map[string]string, error) {
+// aceKey is the per-user map key of one project row: (name, branch).
+func aceKey(name, branch string) string { return name + "\x00" + branch }
+
+func (m *Memory) ACEProjectRefs(_ context.Context, userID string) ([]domain.ACEProjectRef, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	refs := map[string]string{}
-	for name, pr := range m.aceProjs[userID] {
-		refs[name] = pr.SnapshotID
+	refs := []domain.ACEProjectRef{}
+	for _, pr := range m.aceProjs[userID] {
+		refs = append(refs, domain.ACEProjectRef{Name: pr.Name, Branch: pr.Branch, Worktree: pr.Worktree, SnapshotID: pr.SnapshotID})
 	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Name != refs[j].Name {
+			return refs[i].Name < refs[j].Name
+		}
+		return refs[i].Branch < refs[j].Branch
+	})
 	return refs, nil
 }
-func (m *Memory) DeleteACEProject(_ context.Context, userID, name string) error {
+func (m *Memory) DeleteACEProject(_ context.Context, userID, name, branch string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.aceProjs[userID], name)
+	delete(m.aceProjs[userID], aceKey(name, branch))
 	return nil
 }
-func (m *Memory) PurgeACEProject(_ context.Context, userID, name string) error {
+func (m *Memory) UserHeldBlobNames(_ context.Context, userID string, names []string) (map[string]bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	held := map[string]bool{}
+	for _, pr := range m.aceProjs[userID] {
+		for _, name := range m.snapshots[pr.SnapshotID].BlobNames {
+			held[name] = true
+		}
+	}
+	out := map[string]bool{}
+	for _, name := range names {
+		if held[name] {
+			out[name] = true
+		}
+	}
+	return out, nil
+}
+func (m *Memory) RenameACEJobs(_ context.Context, userID, from, to string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	pr, ok := m.aceProjs[userID][name]
+	for id, j := range m.jobs {
+		if j.OwnerID == userID && j.Repository == from && j.RepositoryID == "" {
+			j.Repository = to
+			m.jobs[id] = j
+		}
+	}
+	return nil
+}
+func (m *Memory) UserStorageBytes(_ context.Context, userID string) (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	seen := map[string]bool{}
+	var total int64
+	for _, pr := range m.aceProjs[userID] {
+		for _, name := range m.snapshots[pr.SnapshotID].BlobNames {
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			total += int64(len(m.blobs[name].Content))
+		}
+	}
+	return total, nil
+}
+func (m *Memory) PurgeACEProject(_ context.Context, userID, name, branch string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pr, ok := m.aceProjs[userID][aceKey(name, branch)]
 	if !ok {
 		return ErrNotFound
 	}
-	delete(m.aceProjs[userID], name)
+	delete(m.aceProjs[userID], aceKey(name, branch))
+	label := domain.ACEProjectLabel(name, branch)
 	for id, j := range m.jobs {
-		if j.OwnerID == userID && j.Repository == name && j.RepositoryID == "" {
+		if j.OwnerID == userID && j.Repository == label && j.RepositoryID == "" {
 			delete(m.jobs, id)
 		}
 	}
@@ -704,25 +758,25 @@ func (m *Memory) PurgeACEProject(_ context.Context, userID, name string) error {
 	}
 	return nil
 }
-func (m *Memory) SaveACEProject(_ context.Context, userID, name, snapshotID string) error {
+func (m *Memory) SaveACEProject(_ context.Context, userID string, ref domain.ACEProjectRef) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.aceProjs[userID] == nil {
 		m.aceProjs[userID] = map[string]domain.ACEProject{}
 	}
-	m.aceProjs[userID][name] = domain.ACEProject{Name: name, SnapshotID: snapshotID, UpdatedAt: time.Now()}
+	m.aceProjs[userID][aceKey(ref.Name, ref.Branch)] = domain.ACEProject{Name: ref.Name, Branch: ref.Branch, Worktree: ref.Worktree, SnapshotID: ref.SnapshotID, UpdatedAt: time.Now()}
 	return nil
 }
-func (m *Memory) EnsureACEProject(_ context.Context, userID, name string) (bool, error) {
+func (m *Memory) EnsureACEProject(_ context.Context, userID string, ref domain.ACEProjectRef) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.aceProjs[userID] == nil {
 		m.aceProjs[userID] = map[string]domain.ACEProject{}
 	}
-	if _, ok := m.aceProjs[userID][name]; ok {
+	if _, ok := m.aceProjs[userID][aceKey(ref.Name, ref.Branch)]; ok {
 		return false, nil
 	}
-	m.aceProjs[userID][name] = domain.ACEProject{Name: name, UpdatedAt: time.Now()}
+	m.aceProjs[userID][aceKey(ref.Name, ref.Branch)] = domain.ACEProject{Name: ref.Name, Branch: ref.Branch, Worktree: ref.Worktree, UpdatedAt: time.Now()}
 	return true, nil
 }
 func (m *Memory) ListACEProjects(_ context.Context, userID, modelID string) ([]domain.ACEProject, error) {

@@ -271,7 +271,13 @@ type ACEUsageDay struct {
 // paths only), so the name is inferred from manifest blobs and stats are
 // computed from the archived snapshot.
 type ACEProject struct {
-	Name          string    `json:"name"`
+	Name string `json:"name"`
+	// Branch and Worktree come from git-aware bce-tool-rs clients: one row
+	// per (name, branch) so sibling worktrees and branches of a repository
+	// stay apart; Worktree marks a linked `git worktree` checkout. Both are
+	// empty/false for rows archived by older or stock ACE clients.
+	Branch        string    `json:"branch,omitempty"`
+	Worktree      bool      `json:"worktree,omitempty"`
 	OwnerID       string    `json:"owner_id,omitempty"`
 	OwnerUsername string    `json:"owner_username,omitempty"`
 	SnapshotID    string    `json:"snapshot_id"`
@@ -280,6 +286,25 @@ type ACEProject struct {
 	EmbeddedCount int       `json:"embedded_count"`
 	StorageBytes  int64     `json:"storage_bytes"`
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// ACEProjectRef is the identity + checkpoint pointer of one archived ACE
+// project row without the derived stats: (Name, Branch) is the per-user key.
+type ACEProjectRef struct {
+	Name       string
+	Branch     string
+	Worktree   bool
+	SnapshotID string
+}
+
+// ACEProjectLabel is the human label of a project row: the bare name, or
+// "name (branch)" once a git-aware client reported the branch. Activity jobs
+// and audit entries carry this label.
+func ACEProjectLabel(name, branch string) string {
+	if branch == "" {
+		return name
+	}
+	return name + " (" + branch + ")"
 }
 
 // Announcement is one admin-published notice. The console shows the latest

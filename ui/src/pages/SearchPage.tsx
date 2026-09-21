@@ -7,7 +7,7 @@ import { useI18n } from '../i18n'
 import { PageHeader } from '../components/PageHeader'
 import { Empty } from '../components/Empty'
 import { Score } from '../components/Score'
-import { compact, ms } from '../lib/format'
+import { compact, ms, projectLabel } from '../lib/format'
 
 // SearchPage runs a retrieval against one of the user's ready projects and
 // shows why each fragment was selected (ACE response + ranked hits).
@@ -36,7 +36,7 @@ export function SearchPage(){
       <section className="query-panel">
         <label>{t('Project')}</label>
         <Select width="100%" value={project} onChange={v=>setProject(String(v))}>
-          {projects.map(p=><Select.Option key={(p.owner_id||'')+p.name} value={p.snapshot_id} disabled={!isReady(p)}>{isReady(p)?p.name:`${p.name} · ${t('Indexing')}`}</Select.Option>)}
+          {projects.map(p=><Select.Option key={(p.owner_id||'')+p.name+'\n'+(p.branch||'')} value={p.snapshot_id} disabled={!isReady(p)}>{isReady(p)?projectLabel(p.name,p.branch):`${projectLabel(p.name,p.branch)} · ${t('Indexing')}`}</Select.Option>)}
         </Select>
         <label>{t('Information request')}</label>
         <textarea value={query} onChange={e=>setQuery(e.target.value)} rows={7} placeholder={t('e.g. Where is authentication implemented?')}/>

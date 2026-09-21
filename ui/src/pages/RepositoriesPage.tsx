@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { Button, Loading } from '@geist-ui/core'
-import { Box, Info, Search, Share2, Trash2 } from '@geist-ui/icons'
+import { Box, GitBranch, Info, Search, Share2, Trash2 } from '@geist-ui/icons'
 import { api } from '../api'
 import type { AceProject } from '../types'
 import { useI18n } from '../i18n'
@@ -9,7 +9,7 @@ import { Empty } from '../components/Empty'
 import { Pagination } from '../components/Pagination'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { PAGE_SIZE, usePaged } from '../hooks/usePaged'
-import { bytes, compact, formatDate, short } from '../lib/format'
+import { bytes, compact, formatDate, projectLabel, short } from '../lib/format'
 
 // Lazy: force-graph (canvas + d3 modules) only downloads when a graph opens.
 const ProjectGraphModal = lazy(() => import('../components/ProjectGraphModal'))
@@ -26,12 +26,12 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
   const filtered=useMemo(()=>{
     const q=query.trim().toLowerCase()
     if(!q)return projects||[]
-    return (projects||[]).filter(p=>p.name.toLowerCase().includes(q))
+    return (projects||[]).filter(p=>p.name.toLowerCase().includes(q)||(p.branch||'').toLowerCase().includes(q))
   },[projects,query])
   const {page,setPage,paged,total,size}=usePaged(filtered,admin?PAGE_SIZE:5)
   const load=()=>api<{projects:AceProject[]}>(admin?'/api/v1/admin/ace-projects':'/api/v1/me/ace-projects').then(v=>setProjects(v.projects)).catch(()=>setProjects([]))
   useEffect(()=>{void load()},[admin,refresh])
-  const [graphProject,setGraphProject]=useState<string|null>(null)
+  const [graphProject,setGraphProject]=useState<AceProject|null>(null)
   const [pendingDelete,setPendingDelete]=useState<AceProject|null>(null)
   const [deleting,setDeleting]=useState(false)
   const [deleteError,setDeleteError]=useState('')
@@ -39,10 +39,12 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
   const confirmDelete=async()=>{
     if(!pendingDelete)return
     setDeleting(true);setDeleteError('')
-    try{await api(`/api/v1/me/ace-projects/${encodeURIComponent(pendingDelete.name)}`,{method:'DELETE'});setPendingDelete(null);load()}
+    try{await api(projectPath(pendingDelete),{method:'DELETE'});setPendingDelete(null);load()}
     catch(e){setDeleteError((e as Error).message)}
     finally{setDeleting(false)}
   }
+  // Rows are keyed by (name, branch); branch rides along as a query param.
+  const projectPath=(p:AceProject)=>`/api/v1/me/ace-projects/${encodeURIComponent(p.name)}${p.branch?`?branch=${encodeURIComponent(p.branch)}`:''}`
   // Empty snapshot_id = placeholder row while the first upload is in flight.
   const indexStatus=(p:AceProject)=>
     !p.snapshot_id?<span className="status-pill warn"><i className="status-dot warn"/><em>{t('Uploading')}</em></span>
@@ -70,8 +72,14 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
           <th>{t('Last active')}</th>
           {!admin&&<th/>}
         </tr></thead>
-        <tbody>{paged.map(p=><tr key={(p.owner_id||'')+p.name}>
-          <td><div className="repo-name"><span className="repo-icon"><Box size={15}/></span><strong>{p.name}</strong></div></td>
+        <tbody>{paged.map(p=><tr key={(p.owner_id||'')+p.name+'\n'+(p.branch||'')}>
+          <td><div className="repo-name"><span className="repo-icon"><Box size={15}/></span><div>
+            <strong>{p.name}</strong>
+            {(p.branch||p.worktree)&&<small className="repo-meta">
+              {p.branch&&<><GitBranch size={10}/><span>{p.branch}</span></>}
+              {p.worktree&&<span className="worktree-badge" title={t('Linked git worktree')}>worktree</span>}
+            </small>}
+          </div></div></td>
           {admin&&<td>{p.owner_username}</td>}
           <td>{compact(p.file_count)}</td>
           <td>{compact(p.chunk_count)}</td>
@@ -80,7 +88,7 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
             :<><td>{indexStatus(p)}</td><td>{bytes(p.storage_bytes)}</td></>}
           <td>{formatDate(p.updated_at,language)}</td>
           {!admin&&<td><div className="row-actions">
-            <Button auto scale={.62} ghost className="btn-graph" icon={<Share2/>} disabled={!p.snapshot_id} onClick={()=>setGraphProject(p.name)}>{t('Graph')}</Button>
+            <Button auto scale={.62} ghost className="btn-graph" icon={<Share2/>} disabled={!p.snapshot_id} onClick={()=>setGraphProject(p)}>{t('Graph')}</Button>
             <Button auto scale={.62} type="error" ghost icon={<Trash2/>} onClick={()=>setPendingDelete(p)}>{t('Delete')}</Button>
           </div></td>}
         </tr>)}</tbody>
@@ -89,9 +97,9 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
       {projects.length>0&&filtered.length===0&&<Empty title={t('No projects match.')} text={t('Try a different keyword.')}/>}
     </div>
     <Pagination total={total} page={page} onChange={setPage} size={size}/>
-    {graphProject&&<Suspense fallback={null}><ProjectGraphModal project={graphProject} onClose={()=>setGraphProject(null)}/></Suspense>}
+    {graphProject&&<Suspense fallback={null}><ProjectGraphModal project={graphProject.name} branch={graphProject.branch} onClose={()=>setGraphProject(null)}/></Suspense>}
     {pendingDelete&&<ConfirmModal
-      title={t('Delete project')} target={pendingDelete.name}
+      title={t('Delete project')} target={projectLabel(pendingDelete.name,pendingDelete.branch)}
       text={t('All of its index data (snapshots, fragments, vectors) will be permanently erased and cannot be recovered; retrieval stops working until your client re-uploads the workspace on its next search.')}
       confirmLabel={t('Delete')} danger busy={deleting} error={deleteError}
       onCancel={closeDelete} onConfirm={confirmDelete}/>}
