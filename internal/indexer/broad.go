@@ -199,11 +199,10 @@ func (s *Service) startDecompose(ctx context.Context, query string) <-chan []str
 			"messages":   []map[string]string{{"role": "system", "content": decomposeSystemPrompt}, {"role": "user", "content": query}},
 			"stream":     false,
 			"max_tokens": 300,
-			// Qwen3-family hybrid models burn the whole budget on <think>
-			// and return empty content without this (which silently killed
-			// sub-query decomposition); other providers ignore the field.
-			"enable_thinking": false,
 		}
+		// Hybrid models burn the whole budget on <think> and return empty
+		// content otherwise, which silently kills sub-query decomposition.
+		disableThinking(body, url)
 		if err := postJSON(dctx, url+"/chat/completions", cfg.apiKey(), body, &response); err != nil || len(response.Choices) == 0 {
 			ch <- nil
 			return

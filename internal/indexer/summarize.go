@@ -157,11 +157,10 @@ func (s *Service) summarizeChunks(ctx context.Context, cfg EnhanceConfig, chunks
 				"messages":   []map[string]string{{"role": "system", "content": summarizeSystemPrompt}, {"role": "user", "content": prompt.String()}},
 				"stream":     false,
 				"max_tokens": 80 * len(batch),
-				// Qwen3-family hybrid models spend the whole max_tokens budget
-				// on <think> reasoning and return empty content without this;
-				// providers without the parameter ignore it.
-				"enable_thinking": false,
 			}
+			// Hybrid models spend the whole max_tokens budget on <think>
+			// reasoning and return empty content unless suppressed.
+			disableThinking(body, url)
 			if err := postJSON(cctx, url+"/chat/completions", cfg.apiKey(), body, &response); err != nil || len(response.Choices) == 0 {
 				return
 			}

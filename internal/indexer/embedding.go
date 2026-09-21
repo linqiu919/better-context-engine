@@ -249,6 +249,21 @@ func embedOpenAI(ctx context.Context, cfg EmbeddingConfig, inputs []string, kind
 	return out, nil
 }
 
+// disableThinking suppresses hybrid-model reasoning in every provider
+// dialect the chat calls may hit. enable_thinking is the SiliconFlow/Qwen
+// field, ignored where unknown. OpenRouter does NOT forward it upstream and
+// instead honors a unified "reasoning" object — without it, Qwen hybrid
+// models there burn the whole max_tokens budget on reasoning and return null
+// content, which silently kills expansion/decomposition/summaries. The
+// reasoning field is gated to OpenRouter because strict OpenAI-compatible
+// gateways (vLLM) can reject unknown top-level parameters outright.
+func disableThinking(body map[string]any, url string) {
+	body["enable_thinking"] = false
+	if strings.Contains(url, "openrouter") {
+		body["reasoning"] = map[string]any{"enabled": false}
+	}
+}
+
 // postJSON is the shared HTTP client for all model backends (embedding,
 // reranker, enhancer). A non-empty apiKey is sent as a Bearer token so cloud
 // platforms (SiliconFlow, OpenAI, ...) work; local servers ignore the header.

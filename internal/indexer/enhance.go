@@ -175,9 +175,10 @@ func (s *Service) EnhancePrompt(ctx context.Context, userID, prompt string, hist
 	}
 	cctx, cancel := context.WithTimeout(ctx, enhanceTTL)
 	defer cancel()
-	// enable_thinking=false: prompt rewriting needs no chain-of-thought, and
-	// Qwen3-family hybrid models otherwise bill/emit reasoning tokens first.
-	body := map[string]any{"model": cfg.Model, "messages": messages, "stream": false, "enable_thinking": false}
+	// Thinking off: prompt rewriting needs no chain-of-thought, and hybrid
+	// models otherwise bill/emit reasoning tokens before any content.
+	body := map[string]any{"model": cfg.Model, "messages": messages, "stream": false}
+	disableThinking(body, url)
 	if err := postJSON(cctx, url+"/chat/completions", cfg.apiKey(), body, &response); err != nil {
 		return "", err
 	}

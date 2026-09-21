@@ -107,10 +107,8 @@ func (s *Service) startTermExpand(ctx context.Context, query string) <-chan quer
 			// restatement; genuinely truncated output is dropped via
 			// finish_reason below rather than trusted.
 			"max_tokens": 256,
-			// same Qwen3 hybrid-model guard as startDecompose: without this the
-			// budget goes to <think> and content comes back empty.
-			"enable_thinking": false,
 		}
+		disableThinking(body, url)
 		if err := postJSON(ectx, url+"/chat/completions", cfg.apiKey(), body, &response); err != nil || len(response.Choices) == 0 {
 			slog.Warn("term expand: request failed", "err", err, "ms", time.Since(started).Milliseconds())
 			ch <- queryExpansion{}
