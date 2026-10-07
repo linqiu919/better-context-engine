@@ -259,9 +259,38 @@ func embedOpenAI(ctx context.Context, cfg EmbeddingConfig, inputs []string, kind
 // gateways (vLLM) can reject unknown top-level parameters outright.
 func disableThinking(body map[string]any, url string) {
 	body["enable_thinking"] = false
-	if strings.Contains(url, "openrouter") {
+	if isOpenRouter(url) {
 		body["reasoning"] = map[string]any{"enabled": false}
 	}
+}
+
+func isOpenRouter(url string) bool { return strings.Contains(url, "openrouter") }
+
+// applyChatOptions is the single hook every enhancer-side chat call passes
+// its body through: thinking off, plus OpenRouter provider routing when the
+// admin pinned providers. Fallbacks stay allowed, so the listed providers are
+// a preference order and OpenRouter still serves the request when all of
+// them are down; the field is gated to OpenRouter like "reasoning" above.
+func (c EnhanceConfig) applyChatOptions(body map[string]any, url string) {
+	disableThinking(body, url)
+	if len(c.Providers) > 0 && isOpenRouter(url) {
+		body["provider"] = map[string]any{"order": c.Providers, "allow_fallbacks": true}
+	}
+}
+
+// ParseProviderList splits a stored provider list (comma/newline/space
+// separated, same grammar as API key lists) and drops duplicates while
+// keeping order. Never returns nil so the settings API serializes [].
+func ParseProviderList(raw string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, p := range splitAPIKeys(raw) {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // postJSON is the shared HTTP client for all model backends (embedding,

@@ -1774,6 +1774,95 @@ code::after {
   border-color: var(--blue);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 16%, transparent);
 }
+/* Label row with a trailing action (API key reveal toggle). */
+.setting-field-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.icon-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.icon-toggle:hover { color: var(--text); background: var(--surface-2); }
+.setting-field textarea.api-keys-input[readonly] { color: var(--muted); cursor: pointer; }
+.setting-hint { font-size: 10.5px; color: var(--muted); line-height: 1.5; }
+/* Ordered tag list (OpenRouter provider slugs); the index shows try order. */
+.tag-input {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface-2);
+}
+.tag-input:focus-within {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 16%, transparent);
+}
+.tag-input input:not([type=checkbox]) {
+  flex: 1;
+  min-width: 90px;
+  width: auto;
+  height: 24px;
+  border: 0;
+  padding: 0 2px;
+  background: transparent;
+  box-shadow: none !important;
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 4px 0 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  font: 11px var(--font-mono);
+  color: var(--text);
+}
+.tag-chip em { font-style: normal; font-size: 9.5px; color: var(--faint); }
+.tag-chip button {
+  display: inline-flex;
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tag-chip button:hover { color: var(--bad); }
+/* Per-card connectivity probe, pinned to the card bottom. */
+.mc-test {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mc-test-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mc-test-head small { font-size: 10.5px; color: var(--muted); line-height: 1.5; }
+.mc-test .form-error { margin: 0; }
+.mc-test-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.mc-test-results li { display: flex; align-items: flex-start; gap: 8px; font-size: 11px; }
+.mc-test-results li > svg { flex: none; margin-top: 1px; }
+.mc-test-results li.ok > svg { color: var(--ok); }
+.mc-test-results li.bad > svg { color: var(--bad); }
+.mc-test-results li > div { min-width: 0; flex: 1; }
+.mc-test-results strong { font-weight: 600; margin-right: 6px; }
+.mc-test-results code { font: 10.5px var(--font-mono); color: var(--muted); }
+.mc-test-ms { float: right; font: 10.5px var(--font-mono); color: var(--faint); }
+.mc-test-results p { margin: 2px 0 0; color: var(--muted); font-family: var(--font-mono); font-size: 10.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.mc-test-results li.bad p { color: var(--bad); }
 .toggle {
   width: 38px;
   height: 22px;

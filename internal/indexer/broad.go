@@ -202,7 +202,7 @@ func (s *Service) startDecompose(ctx context.Context, query string) <-chan []str
 		}
 		// Hybrid models burn the whole budget on <think> and return empty
 		// content otherwise, which silently kills sub-query decomposition.
-		disableThinking(body, url)
+		cfg.applyChatOptions(body, url)
 		if err := postJSON(dctx, url+"/chat/completions", cfg.apiKey(), body, &response); err != nil || len(response.Choices) == 0 {
 			ch <- nil
 			return

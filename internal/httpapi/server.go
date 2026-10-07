@@ -134,6 +134,7 @@ func New(cfg config.Config, st store.Store, authService *auth.Service, idx *inde
 	api.HandleFunc("GET /api/v1/admin/infrastructure", s.adminOnly(s.infrastructure))
 	api.HandleFunc("GET /api/v1/admin/settings/retrieval", s.adminOnly(s.getRetrievalSettings))
 	api.HandleFunc("PATCH /api/v1/admin/settings/retrieval", s.adminOnly(s.updateRetrievalSettings))
+	api.HandleFunc("POST /api/v1/admin/settings/retrieval/test", s.adminOnly(s.testRetrievalSettings))
 	api.HandleFunc("GET /api/v1/admin/settings/system", s.adminOnly(s.getSystemSettings))
 	api.HandleFunc("PATCH /api/v1/admin/settings/system", s.adminOnly(s.updateSystemSettings))
 	api.HandleFunc("GET /api/v1/admin/announcements", s.adminOnly(s.adminListAnnouncements))
@@ -1562,6 +1563,7 @@ func (s *Server) retrievalSettings(ctx context.Context) domain.RetrievalSettings
 		EnhancerModel:       get("enhancer_model", s.config.EnhancerModel),
 		SummaryModel:        get("summary_model", s.config.SummaryModel),
 		SummaryBudget:       summaryBudgetValue(values["summary_budget"]),
+		EnhancerProviders:   indexer.ParseProviderList(values["enhancer_providers"]),
 		EmbeddingAPIKey:     values["embedding_api_key"],
 		EnhancerAPIKey:      values["enhancer_api_key"],
 		UpdatedAt:           time.Now(),
@@ -1627,6 +1629,39 @@ func (s *Server) updateQuotaSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getRetrievalSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.retrievalSettings(r.Context()))
 }
+// testRetrievalSettings probes one model card's unsaved form values against
+// the live providers; nothing is persisted. Failures are reported per check
+// in a 200 body — only a malformed request is an HTTP error.
+func (s *Server) testRetrievalSettings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Target   string                   `json:"target"`
+		Settings domain.RetrievalSettings `json:"settings"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	var checks []indexer.ModelCheck
+	switch req.Target {
+	case "semantic":
+		checks = s.indexer.TestSemanticModels(r.Context(), req.Settings)
+	case "language":
+		checks = s.indexer.TestLanguageModels(r.Context(), req.Settings)
+	default:
+		writeError(w, 400, "target must be semantic or language")
+		return
+	}
+	ok := true
+	for _, c := range checks {
+		ok = ok && c.OK
+	}
+	status := "success"
+	if !ok {
+		status = "failure"
+	}
+	s.audit(r.Context(), currentUser(r), "retrieval_settings.test", "system", req.Target, status, map[string]any{"checks": checks})
+	writeJSON(w, 200, map[string]any{"ok": ok, "checks": checks})
+}
+
 func (s *Server) updateRetrievalSettings(w http.ResponseWriter, r *http.Request) {
 	current := s.retrievalSettings(r.Context())
 	// summary_budget needs present/absent detection: 0 is a meaningful value
@@ -1638,6 +1673,8 @@ func (s *Server) updateRetrievalSettings(w http.ResponseWriter, r *http.Request)
 		// explicit empty string clears the override back to the fallback key.
 		EmbeddingAPIKey *string `json:"embedding_api_key"`
 		EnhancerAPIKey  *string `json:"enhancer_api_key"`
+		// nil = omitted (keep), [] = clear the OpenRouter provider list.
+		EnhancerProviders *[]string `json:"enhancer_providers"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -1682,6 +1719,9 @@ func (s *Server) updateRetrievalSettings(w http.ResponseWriter, r *http.Request)
 	if req.EnhancerAPIKey != nil {
 		current.EnhancerAPIKey = *req.EnhancerAPIKey
 	}
+	if req.EnhancerProviders != nil {
+		current.EnhancerProviders = indexer.ParseProviderList(strings.Join(*req.EnhancerProviders, ","))
+	}
 	if current.EmbeddingDimensions < 128 || current.EmbeddingDimensions > 8192 || current.RerankerTopK < 1 || current.RerankerTopK > 200 {
 		writeError(w, 400, "invalid model dimensions or reranker top-k")
 		return
@@ -1690,7 +1730,7 @@ func (s *Server) updateRetrievalSettings(w http.ResponseWriter, r *http.Request)
 		writeError(w, 400, "summary budget must be between 0 and 500")
 		return
 	}
-	values := map[string]string{"embedding_provider": current.EmbeddingProvider, "embedding_url": current.EmbeddingURL, "embedding_model": current.EmbeddingModel, "embedding_dimensions": strconv.Itoa(current.EmbeddingDimensions), "reranker_enabled": strconv.FormatBool(current.RerankerEnabled), "reranker_model": current.RerankerModel, "reranker_top_k": strconv.Itoa(current.RerankerTopK), "enhancer_provider": current.EnhancerProvider, "enhancer_url": current.EnhancerURL, "enhancer_model": current.EnhancerModel, "summary_model": current.SummaryModel, "summary_budget": strconv.Itoa(current.SummaryBudget), "embedding_api_key": current.EmbeddingAPIKey, "enhancer_api_key": current.EnhancerAPIKey}
+	values := map[string]string{"embedding_provider": current.EmbeddingProvider, "embedding_url": current.EmbeddingURL, "embedding_model": current.EmbeddingModel, "embedding_dimensions": strconv.Itoa(current.EmbeddingDimensions), "reranker_enabled": strconv.FormatBool(current.RerankerEnabled), "reranker_model": current.RerankerModel, "reranker_top_k": strconv.Itoa(current.RerankerTopK), "enhancer_provider": current.EnhancerProvider, "enhancer_url": current.EnhancerURL, "enhancer_model": current.EnhancerModel, "summary_model": current.SummaryModel, "summary_budget": strconv.Itoa(current.SummaryBudget), "embedding_api_key": current.EmbeddingAPIKey, "enhancer_api_key": current.EnhancerAPIKey, "enhancer_providers": strings.Join(current.EnhancerProviders, ",")}
 	if err := s.store.SetSettings(r.Context(), values); err != nil {
 		writeError(w, 500, err.Error())
 		return

@@ -108,7 +108,7 @@ func (s *Service) startTermExpand(ctx context.Context, query string) <-chan quer
 			// finish_reason below rather than trusted.
 			"max_tokens": 256,
 		}
-		disableThinking(body, url)
+		cfg.applyChatOptions(body, url)
 		if err := postJSON(ectx, url+"/chat/completions", cfg.apiKey(), body, &response); err != nil || len(response.Choices) == 0 {
 			slog.Warn("term expand: request failed", "err", err, "ms", time.Since(started).Milliseconds())
 			ch <- queryExpansion{}

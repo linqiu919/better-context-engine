@@ -354,6 +354,9 @@ type RetrievalSettings struct {
 	// SummaryBudget caps LLM summary calls per embedding round; 0 keeps only
 	// the free rule-based file descriptions.
 	SummaryBudget int `json:"summary_budget"`
+	// EnhancerProviders lists OpenRouter provider slugs tried first, in
+	// order, for every chat call; only sent when EnhancerURL is OpenRouter.
+	EnhancerProviders []string `json:"enhancer_providers"`
 	// Per-provider dedicated keys; either may hold several keys
 	// (newline/comma-separated) that are round-robined per request to pool
 	// the accounts' separate rate limits. The legacy shared model_api_key

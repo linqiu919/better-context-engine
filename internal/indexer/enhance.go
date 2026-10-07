@@ -32,6 +32,9 @@ type EnhanceConfig struct {
 	// entirely — rule-based file descriptions still apply. enhanceConfig
 	// resolves it, so the value here is always concrete.
 	SummaryBudget int
+	// Providers are OpenRouter provider slugs preferred in order (see
+	// applyChatOptions); ignored for any other endpoint.
+	Providers []string
 }
 
 // DefaultSummaryBudget is the per-round LLM call cap when summary_budget is
@@ -77,6 +80,7 @@ func (s *Service) enhanceConfig(ctx context.Context) EnhanceConfig {
 		APIKeys:       splitAPIKeys(get("model_api_key", s.defaults.ModelAPIKey)),
 		SummaryModel:  get("summary_model", s.defaults.SummaryModel),
 		SummaryBudget: budget,
+		Providers:     ParseProviderList(values["enhancer_providers"]),
 	}
 	// Same credential resolution as the embedding/rerank paths: dedicated
 	// key(s) win, the legacy shared model_api_key is only a fallback.
@@ -193,7 +197,7 @@ func (s *Service) EnhancePrompt(ctx context.Context, userID string, ws Workspace
 	// Thinking off: prompt rewriting needs no chain-of-thought, and hybrid
 	// models otherwise bill/emit reasoning tokens before any content.
 	body := map[string]any{"model": cfg.Model, "messages": messages, "stream": false}
-	disableThinking(body, url)
+	cfg.applyChatOptions(body, url)
 	if err := postJSON(cctx, url+"/chat/completions", cfg.apiKey(), body, &response); err != nil {
 		return "", err
 	}
