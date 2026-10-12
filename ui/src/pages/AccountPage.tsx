@@ -95,7 +95,11 @@ function RetrievalPrefPanel({user}:{user:User}){
     <p className="settings-intro">{t('Cap on how many tokens a single retrieval may return to your MCP client.')}</p>
     <div className="pref-row">
       <span className="pref-label">{t('Max output per retrieval (tokens)')}</span>
-      <input type="number" min={1600} max={24000} step={800} value={value} onChange={e=>setValue(Number(e.target.value)||0)}/>
+      <div className="pref-controls">
+        {saved&&<span className="pref-saved">{t('Configuration saved')}</span>}
+        <input type="number" min={1600} max={24000} step={800} value={value} onChange={e=>{setValue(Number(e.target.value)||0);setSaved(false)}}/>
+        <Button auto scale={.6} loading={busy} disabled={value<1600||value>24000} onClick={save}>{t('Save')}</Button>
+      </div>
     </div>
     <ul className="pref-notes">
       <li>{t('Allowed range: 1600 – 24000. Default: 6400.')}</li>
@@ -103,68 +107,64 @@ function RetrievalPrefPanel({user}:{user:User}){
       <li>{t('Higher: more complete retrievals; fills the context window faster.')}</li>
     </ul>
     {error&&<p className="form-error">{error}</p>}
-    <div className="settings-actions">{saved&&<span>{t('Configuration saved')}</span>}<Button auto loading={busy} disabled={value<1600||value>24000} onClick={save}>{t('Save')}</Button></div>
   </Panel>
 }
 
 const PURGE_DAYS=[14,30,60,90]
+type PurgePreview={projects:AceProject[];storage_bytes:number}
 
 // AutoPurgeSection: opt-in background cleanup of projects with no retrieval
-// for N days (PATCH /api/v1/me/settings auto_purge_days, 0 = off). The server
-// sweeps hourly; the preview shows what the chosen window would purge now,
-// and saving a window that already catches projects asks for confirmation.
+// for N days (PATCH /api/v1/me/settings auto_purge_days, 0 = off; the server
+// sweeps hourly). It sits under the quota bars, so it stays one row tall and
+// saves on change: switching on or picking a window that already catches
+// projects first previews them and asks for confirmation.
 function AutoPurgeSection({user}:{user:User}){
   const {t}=useI18n()
-  const [saved,setSaved]=useState(user.auto_purge_days||0)
-  const [enabled,setEnabled]=useState(saved>0)
-  const [days,setDays]=useState(saved||30)
-  const [preview,setPreview]=useState<{projects:AceProject[];storage_bytes:number}|null>(null)
+  const [days,setDays]=useState(user.auto_purge_days||0)
+  const [pending,setPending]=useState<{days:number;preview:PurgePreview}|null>(null)
   const [busy,setBusy]=useState(false)
-  const [done,setDone]=useState(false)
   const [error,setError]=useState('')
-  const [confirming,setConfirming]=useState(false)
   // Same stale-prop problem as RetrievalPrefPanel: refetch the saved value.
   useEffect(()=>{
-    api<{user:User}>('/api/v1/me').then(v=>{const d=v.user.auto_purge_days||0;setSaved(d);setEnabled(d>0);if(d)setDays(d)}).catch(()=>{})
+    api<{user:User}>('/api/v1/me').then(v=>setDays(v.user.auto_purge_days||0)).catch(()=>{})
   },[])
-  useEffect(()=>{
-    if(!enabled){setPreview(null);return}
-    api<{projects:AceProject[];storage_bytes:number}>(`/api/v1/me/auto-purge/preview?days=${days}`).then(setPreview).catch(()=>setPreview(null))
-  },[enabled,days])
-  const target=enabled?days:0
-  const persist=async()=>{
-    setBusy(true);setDone(false);setError('')
+  const persist=async(next:number)=>{
+    setBusy(true);setError('')
     try{
-      await api('/api/v1/me/settings',{method:'PATCH',...jsonBody({auto_purge_days:target})})
-      setSaved(target);setDone(true);setConfirming(false)
+      await api('/api/v1/me/settings',{method:'PATCH',...jsonBody({auto_purge_days:next})})
+      setDays(next);setPending(null)
     }catch(e){setError((e as Error).message)}
     finally{setBusy(false)}
   }
-  const save=()=>{if(target>0&&preview&&preview.projects.length>0)setConfirming(true);else void persist()}
-  const names=(preview?.projects||[]).map(p=>projectLabel(p.name,p.branch))
+  const choose=async(next:number)=>{
+    if(busy||next===days)return
+    if(!next){void persist(0);return}
+    setBusy(true);setError('')
+    try{
+      const preview=await api<PurgePreview>(`/api/v1/me/auto-purge/preview?days=${next}`)
+      setBusy(false)
+      if(preview.projects.length)setPending({days:next,preview})
+      else void persist(next)
+    }catch(e){setError((e as Error).message);setBusy(false)}
+  }
+  const names=(pending?.preview.projects||[]).map(p=>projectLabel(p.name,p.branch))
   return <div className="auto-purge">
     <div className="pref-row">
       <span className="pref-label">{t('Auto-clean idle projects')}</span>
-      <label className="toggle"><input type="checkbox" checked={enabled} aria-label={t('Auto-clean idle projects')} onChange={e=>{setEnabled(e.target.checked);setDone(false)}}/><span/></label>
+      <div className="pref-controls">
+        {days>0&&<div className="purge-days" role="radiogroup" aria-label={t('Idle for')}>
+          {PURGE_DAYS.map(d=><button key={d} type="button" role="radio" aria-checked={days===d} className={days===d?'active':''} disabled={busy} onClick={()=>void choose(d)}>{t('{n} days',{n:d})}</button>)}
+        </div>}
+        <label className="toggle"><input type="checkbox" checked={days>0} disabled={busy} aria-label={t('Auto-clean idle projects')} onChange={e=>void choose(e.target.checked?30:0)}/><span/></label>
+      </div>
     </div>
-    {enabled&&<div className="purge-days" role="radiogroup" aria-label={t('Idle for')}>
-      <span>{t('Idle for')}</span>
-      {PURGE_DAYS.map(d=><button key={d} type="button" role="radio" aria-checked={days===d} className={days===d?'active':''} onClick={()=>{setDays(d);setDone(false)}}>{t('{n} days',{n:d})}</button>)}
-    </div>}
-    <ul className="pref-notes">
-      <li>{t('Activity is the last retrieval: a project you only search, without editing, stays active.')}</li>
-      <li>{t('A cleaned project is re-uploaded and re-indexed automatically on its next search.')}</li>
-      {enabled&&preview&&<li>{preview.projects.length
-        ?t('With this window, {n} projects (up to {size}) would be cleaned now.',{n:preview.projects.length,size:bytes(preview.storage_bytes)})
-        :t('No project is idle that long right now.')}</li>}
-    </ul>
-    {error&&!confirming&&<p className="form-error">{error}</p>}
-    <div className="settings-actions">{done&&<span>{t('Configuration saved')}</span>}<Button auto loading={busy&&!confirming} disabled={target===saved} onClick={save}>{t('Save')}</Button></div>
-    {confirming&&<ConfirmModal
+    <p className="quota-note">{t('Idle = no retrieval in the window (searching alone counts as active); a cleaned project re-indexes on its next search.')}</p>
+    {error&&!pending&&<p className="form-error">{error}</p>}
+    {pending&&<ConfirmModal
       title={t('Enable auto-clean')}
       target={names.length>5?t('{list} and {n} more',{list:names.slice(0,5).join(', '),n:names.length-5}):names.join(', ')}
-      text={t('These projects have had no retrieval for {n} days and will be permanently cleaned within the hour; each is re-indexed on its next search.',{n:days})}
+      text={t('These projects (up to {size}) have had no retrieval for {n} days and will be permanently cleaned within the hour; each is re-indexed on its next search.',{n:pending.days,size:bytes(pending.preview.storage_bytes)})}
       confirmLabel={t('Enable')} danger busy={busy} error={error}
-      onCancel={()=>{if(!busy){setConfirming(false);setError('')}}} onConfirm={()=>void persist()}/>}
+      onCancel={()=>{if(!busy){setPending(null);setError('')}}} onConfirm={()=>void persist(pending.days)}/>}
   </div>
 }
