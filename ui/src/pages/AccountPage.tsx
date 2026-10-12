@@ -152,9 +152,11 @@ function AutoPurgeSection({user}:{user:User}){
     <div className="pref-row">
       <span className="pref-label">{t('Auto-clean idle projects')}</span>
       <div className="pref-controls">
-        {days>0&&<div className="purge-days" role="radiogroup" aria-label={t('Idle for')}>
+        {/* Always visible so the windows are discoverable; while off they are
+            dimmed and picking one switches cleanup on with that window. */}
+        <div className={`purge-days${days?'':' off'}`} role="radiogroup" aria-label={t('Idle for')}>
           {PURGE_DAYS.map(d=><button key={d} type="button" role="radio" aria-checked={days===d} className={days===d?'active':''} disabled={busy} onClick={()=>void choose(d)}>{t('{n} days',{n:d})}</button>)}
-        </div>}
+        </div>
         <label className="toggle"><input type="checkbox" checked={days>0} disabled={busy} aria-label={t('Auto-clean idle projects')} onChange={e=>void choose(e.target.checked?30:0)}/><span/></label>
       </div>
     </div>

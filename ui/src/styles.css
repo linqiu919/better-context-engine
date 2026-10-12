@@ -3645,6 +3645,8 @@ html[lang="en"] .slogan em { font-size: .8em; }
 .purge-days button:hover:not(:disabled) { color: var(--text); border-color: var(--line-strong); }
 .purge-days button.active { background: var(--text); border-color: var(--text); color: var(--inverse); }
 .purge-days button:disabled { cursor: default; }
+.purge-days.off button { opacity: .55; }
+.purge-days.off button:hover:not(:disabled) { opacity: 1; }
 .page-account .auto-purge .pref-row { padding: 5px 11px; min-height: 40px; }
 
 /* Quota bars reuse the three-path legend colors (retrieval=--blue,
