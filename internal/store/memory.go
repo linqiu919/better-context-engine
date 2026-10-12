@@ -917,7 +917,7 @@ func (m *Memory) IncQuotaUsage(ctx context.Context, userID, kind string) error {
 func (m *Memory) AddQuotaUsage(_ context.Context, userID, kind string, n int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.quotaUsage[quotaDayPrefix(userID)+kind] += n
+	m.quotaUsage[quotaDayPrefix(userID)+kind] = max(m.quotaUsage[quotaDayPrefix(userID)+kind]+n, 0)
 	return nil
 }
 func (m *Memory) ClearQuotaUsageKind(_ context.Context, userID, kind string) error {

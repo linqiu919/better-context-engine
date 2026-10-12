@@ -34,8 +34,12 @@ type User struct {
 	// MaxOutputTokens caps the token budget of a single retrieval response for
 	// this user; 0 means the server default applies. User-editable from the
 	// account settings page.
-	MaxOutputTokens int       `json:"max_output_tokens"`
-	CreatedAt       time.Time `json:"created_at"`
+	MaxOutputTokens int `json:"max_output_tokens"`
+	// AutoPurgeDays opts the user into background cleanup of archived
+	// projects that saw no retrieval for this many days; 0 = off.
+	// User-editable from the account settings page.
+	AutoPurgeDays int       `json:"auto_purge_days"`
+	CreatedAt     time.Time `json:"created_at"`
 	LastActiveAt    time.Time `json:"last_active_at"`
 }
 

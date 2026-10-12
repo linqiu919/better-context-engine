@@ -269,14 +269,14 @@ func (p *Postgres) sealToken(token string) (string, error) {
 
 // userColumns is the single source of truth for the users column list; keep
 // it in sync with scanUser, CreateUser and UpdateUser.
-const userColumns = "id,username,role,disabled,password_hash,ace_token_hash,ace_token_cipher,email,avatar_url,linuxdo_id,linuxdo_username,trust_level,created_at,last_active_at,max_output_tokens"
+const userColumns = "id,username,role,disabled,password_hash,ace_token_hash,ace_token_cipher,email,avatar_url,linuxdo_id,linuxdo_username,trust_level,created_at,last_active_at,max_output_tokens,auto_purge_days"
 
 func (p *Postgres) CreateUser(ctx context.Context, u domain.User) error {
 	cipherToken, err := p.sealToken(u.ACEToken)
 	if err != nil {
 		return err
 	}
-	_, err = p.db.ExecContext(ctx, `INSERT INTO users(`+userColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`, u.ID, u.Username, u.Role, u.Disabled, u.PasswordHash, u.ACETokenHash, cipherToken, u.Email, u.AvatarURL, u.LinuxDoID, u.LinuxDoUsername, u.TrustLevel, u.CreatedAt, u.LastActiveAt, u.MaxOutputTokens)
+	_, err = p.db.ExecContext(ctx, `INSERT INTO users(`+userColumns+`) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, u.ID, u.Username, u.Role, u.Disabled, u.PasswordHash, u.ACETokenHash, cipherToken, u.Email, u.AvatarURL, u.LinuxDoID, u.LinuxDoUsername, u.TrustLevel, u.CreatedAt, u.LastActiveAt, u.MaxOutputTokens, u.AutoPurgeDays)
 	return err
 }
 func (p *Postgres) UpdateUser(ctx context.Context, u domain.User) error {
@@ -284,7 +284,7 @@ func (p *Postgres) UpdateUser(ctx context.Context, u domain.User) error {
 	if err != nil {
 		return err
 	}
-	r, err := p.db.ExecContext(ctx, `UPDATE users SET username=$2,role=$3,disabled=$4,password_hash=$5,ace_token_hash=$6,ace_token_cipher=$7,email=$8,avatar_url=$9,linuxdo_id=$10,linuxdo_username=$11,trust_level=$12,last_active_at=$13,max_output_tokens=$14 WHERE id=$1`, u.ID, u.Username, u.Role, u.Disabled, u.PasswordHash, u.ACETokenHash, cipherToken, u.Email, u.AvatarURL, u.LinuxDoID, u.LinuxDoUsername, u.TrustLevel, u.LastActiveAt, u.MaxOutputTokens)
+	r, err := p.db.ExecContext(ctx, `UPDATE users SET username=$2,role=$3,disabled=$4,password_hash=$5,ace_token_hash=$6,ace_token_cipher=$7,email=$8,avatar_url=$9,linuxdo_id=$10,linuxdo_username=$11,trust_level=$12,last_active_at=$13,max_output_tokens=$14,auto_purge_days=$15 WHERE id=$1`, u.ID, u.Username, u.Role, u.Disabled, u.PasswordHash, u.ACETokenHash, cipherToken, u.Email, u.AvatarURL, u.LinuxDoID, u.LinuxDoUsername, u.TrustLevel, u.LastActiveAt, u.MaxOutputTokens, u.AutoPurgeDays)
 	if err != nil {
 		return err
 	}
@@ -297,7 +297,7 @@ func (p *Postgres) UpdateUser(ctx context.Context, u domain.User) error {
 func (p *Postgres) scanUser(row interface{ Scan(...any) error }) (domain.User, error) {
 	var u domain.User
 	var cipherToken string
-	if err := row.Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &u.PasswordHash, &u.ACETokenHash, &cipherToken, &u.Email, &u.AvatarURL, &u.LinuxDoID, &u.LinuxDoUsername, &u.TrustLevel, &u.CreatedAt, &u.LastActiveAt, &u.MaxOutputTokens); err != nil {
+	if err := row.Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &u.PasswordHash, &u.ACETokenHash, &cipherToken, &u.Email, &u.AvatarURL, &u.LinuxDoID, &u.LinuxDoUsername, &u.TrustLevel, &u.CreatedAt, &u.LastActiveAt, &u.MaxOutputTokens, &u.AutoPurgeDays); err != nil {
 		return u, mapSQLError(err)
 	}
 	if cipherToken != "" {
@@ -1370,7 +1370,7 @@ func (p *Postgres) IncQuotaUsage(ctx context.Context, userID, kind string) error
 	return p.AddQuotaUsage(ctx, userID, kind, 1)
 }
 func (p *Postgres) AddQuotaUsage(ctx context.Context, userID, kind string, n int64) error {
-	_, err := p.db.ExecContext(ctx, `INSERT INTO user_quota_usage(user_id,day,kind,used) VALUES($1,CURRENT_DATE,$2,$3) ON CONFLICT(user_id,day,kind) DO UPDATE SET used=user_quota_usage.used+$3`, userID, kind, n)
+	_, err := p.db.ExecContext(ctx, `INSERT INTO user_quota_usage(user_id,day,kind,used) VALUES($1,CURRENT_DATE,$2,GREATEST($3,0)) ON CONFLICT(user_id,day,kind) DO UPDATE SET used=GREATEST(user_quota_usage.used+$3,0)`, userID, kind, n)
 	return err
 }
 func (p *Postgres) ClearQuotaUsageKind(ctx context.Context, userID, kind string) error {
@@ -1712,6 +1712,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS linuxdo_id bigint NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS linuxdo_username text NOT NULL DEFAULT '';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS trust_level integer NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS max_output_tokens integer NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_purge_days integer NOT NULL DEFAULT 0;
 CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users(email) WHERE email <> '';
 CREATE UNIQUE INDEX IF NOT EXISTS users_linuxdo_id_unique ON users(linuxdo_id) WHERE linuxdo_id <> 0;
 CREATE UNIQUE INDEX IF NOT EXISTS users_ace_token_idx ON users(ace_token_hash) WHERE ace_token_hash <> '';

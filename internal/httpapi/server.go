@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -98,6 +99,7 @@ func New(cfg config.Config, st store.Store, authService *auth.Service, idx *inde
 	api.HandleFunc("GET /api/v1/me/ace-projects", s.myACEProjects)
 	api.HandleFunc("GET /api/v1/me/ace-projects/{name}/graph", s.myACEProjectGraph)
 	api.HandleFunc("DELETE /api/v1/me/ace-projects/{name}", s.deleteMyACEProject)
+	api.HandleFunc("GET /api/v1/me/auto-purge/preview", s.autoPurgePreview)
 	api.HandleFunc("GET /api/v1/me/ace-usage", s.myACEUsage)
 	api.HandleFunc("GET /api/v1/me/quota", s.meQuota)
 	api.HandleFunc("GET /api/v1/me/announcement", s.myAnnouncement)
@@ -143,6 +145,7 @@ func New(cfg config.Config, st store.Store, authService *auth.Service, idx *inde
 	api.HandleFunc("GET /api/v1/admin/audit-log", s.adminOnly(s.auditLog))
 	mux.Handle("/api/v1/", s.authenticate(api))
 	mux.Handle("/", webassets.Handler())
+	go s.autoPurgeLoop()
 	return securityHeaders(requestLogger(logger, mux))
 }
 
@@ -480,11 +483,13 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"user": currentUser(r), "csrf_token": currentSession(r).CSRFToken})
 }
 
-// updateMySettings lets a user edit their own retrieval preferences; currently
-// just the per-retrieval output budget. 0 restores the server default.
+// updateMySettings lets a user edit their own preferences: the per-retrieval
+// output budget (0 restores the server default) and the idle-project
+// auto-purge window (0 = off).
 func (s *Server) updateMySettings(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		MaxOutputTokens *int `json:"max_output_tokens"`
+		AutoPurgeDays   *int `json:"auto_purge_days"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -501,6 +506,13 @@ func (s *Server) updateMySettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		user.MaxOutputTokens = v
+	}
+	if req.AutoPurgeDays != nil {
+		if !slices.Contains(autoPurgeChoices, *req.AutoPurgeDays) {
+			writeError(w, 400, "auto purge days must be one of 0, 14, 30, 60, 90")
+			return
+		}
+		user.AutoPurgeDays = *req.AutoPurgeDays
 	}
 	if err := s.store.UpdateUser(r.Context(), user); err != nil {
 		writeError(w, 500, err.Error())
@@ -612,6 +624,7 @@ func (s *Server) myACEProjectGraph(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteMyACEProject(w http.ResponseWriter, r *http.Request) {
 	user := currentUser(r)
 	name, branch := r.PathValue("name"), r.URL.Query().Get("branch")
+	before, beforeErr := s.store.UserStorageBytes(r.Context(), user.ID)
 	if err := s.indexer.PurgeACEProject(r.Context(), user.ID, name, branch); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, 404, "project not found")
@@ -621,11 +634,17 @@ func (s *Server) deleteMyACEProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The purge frees storage immediately; drop the cached total so the next
-	// upload quota check sees it, and clear today's upload_bytes so the freed
-	// space can be re-uploaded without tripping the daily volume backstop.
+	// upload quota check sees it, and refund exactly the bytes it freed to
+	// today's upload_bytes so the project can be re-uploaded without tripping
+	// the daily volume backstop. Refunding only the measured difference (not
+	// zeroing the counter) keeps a delete/re-upload loop from turning the
+	// storage ceiling into an unbounded daily ingest allowance; blobs a
+	// sibling branch still holds free nothing and refund nothing.
 	s.dropStorageCache(r.Context(), user.ID)
 	s.clearQuotaBlock(r.Context(), user.ID)
-	_ = s.store.ClearQuotaUsageKind(r.Context(), user.ID, "upload_bytes")
+	if after, err := s.store.UserStorageBytes(r.Context(), user.ID); beforeErr == nil && err == nil && before > after {
+		_ = s.store.AddQuotaUsage(r.Context(), user.ID, "upload_bytes", after-before)
+	}
 	s.audit(r.Context(), user, "ace_project.delete", "ace_project", domain.ACEProjectLabel(name, branch), "success", nil)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }

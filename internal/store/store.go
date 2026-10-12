@@ -186,9 +186,10 @@ type Store interface {
 	// AddQuotaUsage adds n to today's (user, kind) counter — used by the
 	// upload_bytes volume counter, the persistent backstop of the storage
 	// ceiling (pre-archival uploads are invisible to snapshot aggregates).
+	// A negative n refunds (project deletion returns the bytes it actually
+	// freed); the counter never drops below zero.
 	AddQuotaUsage(context.Context, string, string, int64) error
-	// ClearQuotaUsageKind zeroes one of today's counters (project deletion
-	// clears upload_bytes so freed space can be re-uploaded the same day).
+	// ClearQuotaUsageKind zeroes one of today's counters.
 	ClearQuotaUsageKind(context.Context, string, string) error
 	// QuotaUsageToday returns kind -> used for the user's current day.
 	QuotaUsageToday(context.Context, string) (map[string]int64, error)

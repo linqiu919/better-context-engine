@@ -1,5 +1,5 @@
 export type Role = 'user' | 'admin'
-export type User = { id:string; username:string; role:Role; disabled:boolean; email?:string; avatar_url?:string; linuxdo_id?:number; linuxdo_username?:string; trust_level?:number; max_output_tokens?:number; created_at:string; last_active_at:string; repositories?:number; storage_bytes?:number; search_p95_ms?:number; retrieval_today?:number; enhance_today?:number; upload_today?:number }
+export type User = { id:string; username:string; role:Role; disabled:boolean; email?:string; avatar_url?:string; linuxdo_id?:number; linuxdo_username?:string; trust_level?:number; max_output_tokens?:number; auto_purge_days?:number; created_at:string; last_active_at:string; repositories?:number; storage_bytes?:number; search_p95_ms?:number; retrieval_today?:number; enhance_today?:number; upload_today?:number }
 export type AuthConfig = { registration_enabled:boolean; turnstile_site_key:string; linuxdo_enabled:boolean; email_domains?:string[]; version?:string }
 export type QuotaSettings = { storage_limit_mb:number; daily_retrieval:number; daily_enhance:number; daily_upload:number; rpm_retrieval:number; rpm_upload:number; rpm_enhance:number }
 export type QuotaStatus = { limits:QuotaSettings; unlimited:boolean; usage:{ storage_bytes:number; retrieval:number; enhance:number; upload:number } }

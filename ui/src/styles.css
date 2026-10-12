@@ -3625,6 +3625,25 @@ html[lang="en"] .slogan em { font-size: .8em; }
   background: var(--line-strong);
 }
 
+/* 账户页「用量与限额」卡底部的自动清理：分隔线隔开配额条，天数用分段按钮。 */
+.auto-purge { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.purge-days { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.purge-days > span { font: 10px var(--font-mono); color: var(--muted); text-transform: uppercase; letter-spacing: .08em; margin-right: 4px; }
+.purge-days button {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--muted);
+  font: 11px var(--font-mono);
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.purge-days button:hover { color: var(--text); border-color: var(--line-strong); }
+.purge-days button.active { background: var(--text); border-color: var(--text); color: var(--inverse); }
+.page-account .auto-purge .pref-notes { margin-top: 8px; }
+
 /* Quota bars reuse the three-path legend colors (retrieval=--blue,
    enhance=--warn, upload=--ok) per the usage-color convention; storage is
    neutral. A maxed allowance turns its fill red. */
