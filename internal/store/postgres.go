@@ -1027,8 +1027,12 @@ func (p *Postgres) CreateSnapshot(ctx context.Context, s domain.Snapshot) error 
 	if _, err := tx.ExecContext(ctx, `INSERT INTO snapshots(id,repository_id,parent_id,created_at) VALUES($1,NULLIF($2,''),NULLIF($3,''),$4) ON CONFLICT(id) DO NOTHING`, s.ID, s.RepositoryID, s.ParentID, s.CreatedAt); err != nil {
 		return err
 	}
-	for _, name := range s.BlobNames {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO snapshot_blobs(snapshot_id,blob_name) VALUES($1,$2) ON CONFLICT DO NOTHING`, s.ID, name); err != nil {
+	// One statement for the whole blob set: a per-name INSERT loop cost one
+	// round trip per blob, and a 30k-file workspace edited between searches
+	// mints a fresh checkpoint almost every time — 5-8s of round trips before
+	// retrieval even started.
+	if len(s.BlobNames) > 0 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO snapshot_blobs(snapshot_id,blob_name) SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING`, s.ID, s.BlobNames); err != nil {
 			return err
 		}
 	}
