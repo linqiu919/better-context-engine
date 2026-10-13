@@ -58,7 +58,10 @@ type SearchResponse struct {
 	// latency metric subtracts it so cold first queries don't pollute the
 	// P95/P99 a steady-state search is judged by. DurationMS stays the honest
 	// end-to-end figure the client experienced.
-	InlineEmbedMS  float64 `json:"inline_embed_ms,omitempty"`
+	InlineEmbedMS float64 `json:"inline_embed_ms,omitempty"`
+	// PrefilterMS is the slice of DurationMS the large-workspace prefilter
+	// took before the pipeline started (0 when it did not run).
+	PrefilterMS    float64 `json:"prefilter_ms,omitempty"`
 	CandidateCount int     `json:"candidate_count"`
 	TokenEstimate  int     `json:"token_estimate"`
 	Degraded       bool    `json:"degraded"`
@@ -621,6 +624,7 @@ func (s *Service) SearchBlobNames(ctx context.Context, query string, names []str
 	// accounting (missing = referenced but never uploaded), since skipping
 	// most blobs is now intentional, and hands over the query-embed channel
 	// it started so the pipeline reuses the same embedding call.
+	begin := time.Now()
 	requested := len(names)
 	missing := -1
 	var embedCh <-chan queryEmbedResult
@@ -633,6 +637,7 @@ func (s *Service) SearchBlobNames(ctx context.Context, query string, names []str
 			}
 		}
 	}
+	prefiltered := time.Now()
 	// One round trip for the whole workspace: per-name queries would cost a
 	// SELECT plus a decrypt handshake per blob, which dominates search latency
 	// on workspaces with thousands of files.
@@ -653,6 +658,12 @@ func (s *Service) SearchBlobNames(ctx context.Context, query string, names []str
 		files = append(files, domain.RepositoryFile{BlobName: blob.Name, Path: blob.Path, Content: blob.Content})
 	}
 	result := s.searchWith(ctx, query, files, maxOutput, embedCh)
+	// DurationMS covers this whole call, not just the pipeline: on a heavy
+	// workspace the prefilter and blob loading ran before it and used to be
+	// invisible to the latency metric — a 30k-file project answering in 10s
+	// end to end showed up as 4.5s samples.
+	result.PrefilterMS = math.Round(float64(prefiltered.Sub(begin).Microseconds())/10) / 100
+	result.DurationMS = math.Round(float64(time.Since(begin).Microseconds())/10) / 100
 	// Ghost files: the checkpoint references blob names whose content never
 	// made it into the store (the upload was rejected — quota, size — but the
 	// client cached its manifest as sent and won't retry). Without this note
@@ -666,7 +677,7 @@ func (s *Service) SearchBlobNames(ctx context.Context, query string, names []str
 	}
 	// ACE searches are the only search traffic in MCP-only deployments;
 	// without this sample the overview latency profile sits at zero forever.
-	// The sample is retrieval-stage time only: inline embedding of vectors a
+	// The sample is retrieval time minus one thing: inline embedding of vectors a
 	// fresh upload hasn't backfilled yet is one-off indexing debt, and
 	// counting it made every "first search after upload" a fake P99 outlier.
 	_ = s.store.RecordMetric(ctx, domain.MetricPoint{Scope: "ace", Name: "search_latency_ms", Value: max(0, result.DurationMS-result.InlineEmbedMS), Timestamp: time.Now()})

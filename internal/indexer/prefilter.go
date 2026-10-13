@@ -112,14 +112,77 @@ func (s *Service) shouldPrefilter(ctx context.Context, names []string) (map[stri
 // fetch them here.
 func (s *Service) prefilterBlobNames(ctx context.Context, query string, names []string, counts map[string]int) (subset []string, found int, embedCh <-chan queryEmbedResult) {
 	started := time.Now()
+	// The whole-workspace reads are independent, so all of them start now and
+	// overlap: run back to back (paths, symbols, embed wait, vector scan,
+	// chunk counts) they summed to ~5s on a 30k-file snapshot — longer than
+	// the search they were trimming. Only the path read stays on this
+	// goroutine; it settles `found` and whether there is anything to do.
+	embedCh = s.startQueryEmbed(ctx, query)
+	symTokens := codeTokens(query)
+	symCh := make(chan map[string][]string, 1)
+	if len(symTokens) > 0 {
+		go func() {
+			symbols, err := s.store.BlobSymbols(ctx, names)
+			if err != nil {
+				symbols = nil
+			}
+			symCh <- symbols
+		}()
+	} else {
+		symCh <- nil
+	}
+	countsCh := make(chan map[string]int, 1)
+	if counts != nil {
+		countsCh <- counts
+	} else {
+		go func() {
+			c, err := s.store.BlobChunkCounts(ctx, names)
+			if err != nil {
+				c = map[string]int{}
+			}
+			countsCh <- c
+		}()
+	}
+	// Semantic tier: the query vector earns the same bounded wait as in the
+	// pipeline, then the in-database scan runs under its own cap — both in
+	// parallel with the path and identifier tiers below.
+	semCh := make(chan semanticNomination, 1)
+	queryEmbed := embedCh // the named return is rewritten below; read a copy
+	go func() {
+		var out semanticNomination
+		select {
+		case out.embed = <-queryEmbed:
+			out.received = true
+		case <-time.After(queryEmbedWait):
+		}
+		if out.received && out.embed.ok {
+			vctx, cancel := context.WithTimeout(ctx, prefilterVectorTTL)
+			top, err := s.store.TopVectorBlobs(vctx, names, out.embed.cfg.Model, out.embed.vec, prefilterVectorFiles)
+			cancel()
+			if err == nil {
+				out.top = top
+			} else {
+				// Never swallow this: the semantic tier failing looks identical
+				// to it finding nothing ("vector":0 in the summary line), and a
+				// database-side error hid behind that for two days in production
+				// (parallel hash join exhausting the container's 64MB /dev/shm)
+				// while every prefiltered search silently ran without semantics.
+				slog.Warn("search prefilter: vector signal failed", "err", err,
+					"files", len(names), "elapsed_ms", time.Since(started).Milliseconds())
+			}
+		}
+		semCh <- out
+	}()
+
 	paths, err := s.store.BlobPaths(ctx, names)
 	if err != nil {
+		// The pipeline starts its own embed when handed no channel; the one
+		// started above is simply wasted on this (rare) path.
 		return nil, 0, nil
 	}
 	found = len(paths)
-	embedCh = s.startQueryEmbed(ctx, query)
 
-	// Path and manifest tiers score while the query embed is in flight.
+	// Path and manifest tiers score while the other reads are in flight.
 	ptoks := []string{}
 	for _, t := range tokens(query) {
 		if len([]rune(t)) >= 2 {
@@ -149,60 +212,38 @@ func (s *Service) prefilterBlobNames(ctx context.Context, query string, names []
 	// This is what keeps "where is renderAnnouncement handled" selecting the
 	// right file even when neither its path nor its head chunks match.
 	symbolTier := []string{}
-	if symTokens := codeTokens(query); len(symTokens) > 0 {
-		if symbols, err := s.store.BlobSymbols(ctx, names); err == nil {
-			symScored := make([]fileScore, 0, 256)
-			for n, syms := range symbols {
-				hits := 0
-				for _, sym := range syms {
-					ls := strings.ToLower(sym)
-					for _, t := range symTokens {
-						if strings.Contains(ls, t) {
-							hits++
-						}
+	if symbols := <-symCh; symbols != nil {
+		symScored := make([]fileScore, 0, 256)
+		for n, syms := range symbols {
+			hits := 0
+			for _, sym := range syms {
+				ls := strings.ToLower(sym)
+				for _, t := range symTokens {
+					if strings.Contains(ls, t) {
+						hits++
 					}
 				}
-				if hits > 0 {
-					symScored = append(symScored, fileScore{n, hits})
-				}
 			}
-			symbolTier = topNames(symScored, prefilterSymbolFiles)
+			if hits > 0 {
+				symScored = append(symScored, fileScore{n, hits})
+			}
 		}
+		symbolTier = topNames(symScored, prefilterSymbolFiles)
 	}
 
-	// Semantic tier: the query vector earns the same bounded wait as in the
-	// pipeline (most of it has usually elapsed during the scoring above). A
-	// received result is re-buffered so the pipeline's select still gets its
-	// value; on timeout the original channel passes through and the
+	// A received embedding is re-buffered so the pipeline's select still gets
+	// its value; on timeout the original channel passes through and the
 	// pipeline's own wait picks up whatever arrives later.
-	var pre queryEmbedResult
-	received := false
-	select {
-	case pre = <-embedCh:
-		received = true
-	case <-time.After(queryEmbedWait):
-	}
+	sem := <-semCh
+	received, pre := sem.received, sem.embed
 	if received {
 		re := make(chan queryEmbedResult, 1)
 		re <- pre
 		embedCh = re
 	}
-	vectorTier := []string{}
-	if received && pre.ok {
-		vctx, cancel := context.WithTimeout(ctx, prefilterVectorTTL)
-		top, err := s.store.TopVectorBlobs(vctx, names, pre.cfg.Model, pre.vec, prefilterVectorFiles)
-		if err == nil {
-			vectorTier = top
-		} else {
-			// Never swallow this: the semantic tier failing looks identical
-			// to it finding nothing ("vector":0 in the summary line), and a
-			// database-side error hid behind that for two days in production
-			// (parallel hash join exhausting the container's 64MB /dev/shm)
-			// while every prefiltered search silently ran without semantics.
-			slog.Warn("search prefilter: vector signal failed", "err", err,
-				"files", len(names), "elapsed_ms", time.Since(started).Milliseconds())
-		}
-		cancel()
+	vectorTier := sem.top
+	if vectorTier == nil {
+		vectorTier = []string{}
 	}
 
 	// Content-grounded signals only: when both the semantic and the
@@ -222,12 +263,7 @@ func (s *Service) prefilterBlobNames(ctx context.Context, query string, names []
 	// Round-robin drain against the chunk budget. The tiers are
 	// relevance-ordered, so interleaving keeps each signal's best files even
 	// when chunk-heavy documentation would exhaust the budget in one tier.
-	if counts == nil {
-		var err error
-		if counts, err = s.store.BlobChunkCounts(ctx, names); err != nil {
-			counts = map[string]int{}
-		}
-	}
+	counts = <-countsCh
 	keep := map[string]bool{}
 	kept, chunks := 0, 0
 	tiers := [][]string{vectorTier, symbolTier, pathTier, manifestTier}
@@ -275,6 +311,14 @@ func (s *Service) prefilterBlobNames(ctx context.Context, query string, names []
 		"vector", len(vectorTier), "symbol", len(symbolTier), "path", len(pathTier), "manifest", len(manifestTier),
 		"duration_ms", time.Since(started).Milliseconds())
 	return subset, found, embedCh
+}
+
+// semanticNomination is the semantic tier's result: the query embedding (if
+// it arrived within the wait) and the files it nominated.
+type semanticNomination struct {
+	embed    queryEmbedResult
+	received bool
+	top      []string
 }
 
 type fileScore struct {

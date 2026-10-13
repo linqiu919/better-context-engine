@@ -908,7 +908,7 @@ func (s *Server) aceSearch(w http.ResponseWriter, r *http.Request) {
 	// piggybacked on another request's run (duration shown is that run's).
 	slog.Info("ace search",
 		"user", currentUser(r).Username, "project", req.ProjectName, "files", len(blobs),
-		"duration_ms", int(result.DurationMS), "degraded", result.Degraded, "missing", result.MissingBlobs,
+		"duration_ms", int(result.DurationMS), "prefilter_ms", int(result.PrefilterMS), "degraded", result.Degraded, "missing", result.MissingBlobs,
 		"merged", merged)
 	s.recordACEUsage(r, "retrieval", int64(result.TokenEstimate))
 	s.bumpQuota(r, "retrieval")

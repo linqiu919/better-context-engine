@@ -816,24 +816,50 @@ func (p *Postgres) VectorScores(ctx context.Context, chunkIDs []string, modelID 
 	return out, rows.Err()
 }
 
+// queryNoJIT runs one read query with JIT compilation off for its
+// transaction. The prefilter's whole-workspace scans (tens of thousands of
+// blob names in ANY($n)) carry planner costs far past jit_above_cost, so
+// every search paid ~0.5s compiling expressions for queries that execute in
+// 1-2s — JIT pays off for long analytics, never for a latency-bound read.
+func (p *Postgres) queryNoJIT(ctx context.Context, query string, args []any, scan func(*sql.Rows) error) error {
+	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SET LOCAL jit = off`); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := scan(rows); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 func (p *Postgres) BlobPaths(ctx context.Context, names []string) (map[string]string, error) {
 	out := make(map[string]string, len(names))
 	if len(names) == 0 {
 		return out, nil
 	}
-	rows, err := p.db.QueryContext(ctx, `SELECT name,path FROM blobs WHERE name = ANY($1)`, names)
+	err := p.queryNoJIT(ctx, `SELECT name,path FROM blobs WHERE name = ANY($1)`, []any{names}, func(rows *sql.Rows) error {
+		var name, path string
+		if err := rows.Scan(&name, &path); err != nil {
+			return err
+		}
+		out[name] = path
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var name, path string
-		if err := rows.Scan(&name, &path); err != nil {
-			return nil, err
-		}
-		out[name] = path
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (p *Postgres) BlobChunkCounts(ctx context.Context, names []string) (map[string]int, error) {
@@ -841,20 +867,19 @@ func (p *Postgres) BlobChunkCounts(ctx context.Context, names []string) (map[str
 	if len(names) == 0 {
 		return out, nil
 	}
-	rows, err := p.db.QueryContext(ctx, `SELECT blob_name, count(*) FROM chunks WHERE blob_name = ANY($1) GROUP BY blob_name`, names)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
+	err := p.queryNoJIT(ctx, `SELECT blob_name, count(*) FROM chunks WHERE blob_name = ANY($1) GROUP BY blob_name`, []any{names}, func(rows *sql.Rows) error {
 		var name string
 		var n int
 		if err := rows.Scan(&name, &n); err != nil {
-			return nil, err
+			return err
 		}
 		out[name] = n
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (p *Postgres) BlobSymbols(ctx context.Context, names []string) (map[string][]string, error) {
@@ -862,19 +887,18 @@ func (p *Postgres) BlobSymbols(ctx context.Context, names []string) (map[string]
 	if len(names) == 0 {
 		return out, nil
 	}
-	rows, err := p.db.QueryContext(ctx, `SELECT DISTINCT blob_name, symbol FROM chunks WHERE blob_name = ANY($1) AND symbol <> ''`, names)
+	err := p.queryNoJIT(ctx, `SELECT DISTINCT blob_name, symbol FROM chunks WHERE blob_name = ANY($1) AND symbol <> ''`, []any{names}, func(rows *sql.Rows) error {
+		var name, symbol string
+		if err := rows.Scan(&name, &symbol); err != nil {
+			return err
+		}
+		out[name] = append(out[name], symbol)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var name, symbol string
-		if err := rows.Scan(&name, &symbol); err != nil {
-			return nil, err
-		}
-		out[name] = append(out[name], symbol)
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // TopVectorBlobs ranks files by their best head chunk's similarity (seq < 4),
@@ -887,11 +911,19 @@ func (p *Postgres) BlobSymbols(ctx context.Context, names []string) (map[string]
 // here — this stage only nominates files, and the pipeline re-scores the
 // surviving chunks with full-precision vectors. Rows whose sketch has not
 // been backfilled yet are simply not nominated during the backfill window.
+//
+// The legacy branch is restricted to chunks with an empty content_hash — the
+// only ones whose vectors live in chunk_vectors. Without that filter the
+// planner expected thousands of matches and hash-joined the entire
+// chunk_vectors table (550k rows, spilling to temp) on every prefilter: 1.5s
+// of a 2.5s budget spent on a branch that matched nothing for hash-era
+// projects.
 func (p *Postgres) TopVectorBlobs(ctx context.Context, names []string, modelID string, query []float32, k int) ([]string, error) {
 	if len(names) == 0 || len(query) == 0 || k <= 0 {
 		return []string{}, nil
 	}
-	rows, err := p.db.QueryContext(ctx, `
+	out := make([]string, 0, k)
+	err := p.queryNoJIT(ctx, `
 		WITH q AS (SELECT binary_quantize($1::vector) AS s)
 		SELECT blob_name FROM (
 			SELECT c.blob_name, MIN(e.sketch <~> (SELECT s FROM q)) AS d
@@ -900,22 +932,20 @@ func (p *Postgres) TopVectorBlobs(ctx context.Context, names []string, modelID s
 			UNION ALL
 			SELECT v_c.blob_name, MIN(v.sketch <~> (SELECT s FROM q)) AS d
 			  FROM chunks v_c JOIN chunk_vectors v ON v.chunk_id=v_c.id AND v.model_id=$2 AND v.dims=$3
-			 WHERE v.sketch IS NOT NULL AND v_c.seq < 4 AND v_c.blob_name = ANY($4) GROUP BY v_c.blob_name
+			 WHERE v.sketch IS NOT NULL AND v_c.content_hash = '' AND v_c.seq < 4 AND v_c.blob_name = ANY($4) GROUP BY v_c.blob_name
 		) t GROUP BY blob_name ORDER BY MIN(d) ASC LIMIT $5`,
-		formatVector(query), modelID, len(query), names, k)
+		[]any{formatVector(query), modelID, len(query), names, k}, func(rows *sql.Rows) error {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				return err
+			}
+			out = append(out, name)
+			return nil
+		})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := make([]string, 0, k)
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		out = append(out, name)
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (p *Postgres) BlobsMissingEmbeddings(ctx context.Context, modelID string, limit int) ([]string, error) {
