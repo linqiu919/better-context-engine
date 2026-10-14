@@ -628,7 +628,14 @@ func (s *Service) SearchBlobNames(ctx context.Context, query string, names []str
 	requested := len(names)
 	missing := -1
 	var embedCh <-chan queryEmbedResult
+	var expandCh <-chan queryExpansion
 	if counts, heavy := s.shouldPrefilter(ctx, names); heavy {
+		// Term expansion is an LLM round trip (~2s) that needs only the
+		// query, so on a heavy workspace it starts before the prefilter and
+		// overlaps it instead of queueing behind it.
+		if needsTermExpansion(query) {
+			expandCh = s.startTermExpand(ctx, query)
+		}
 		if subset, found, ch := s.prefilterBlobNames(ctx, query, names, counts); ch != nil {
 			embedCh = ch
 			missing = requested - found
@@ -657,7 +664,7 @@ func (s *Service) SearchBlobNames(ctx context.Context, query string, names []str
 		}
 		files = append(files, domain.RepositoryFile{BlobName: blob.Name, Path: blob.Path, Content: blob.Content})
 	}
-	result := s.searchWith(ctx, query, files, maxOutput, embedCh)
+	result := s.searchWith(ctx, query, files, maxOutput, embedCh, expandCh)
 	// DurationMS covers this whole call, not just the pipeline: on a heavy
 	// workspace the prefilter and blob loading ran before it and used to be
 	// invisible to the latency metric — a 30k-file project answering in 10s
@@ -765,14 +772,15 @@ const (
 // budget → XML context block. Every path degrades independently; a search
 // never fails outright because a model server is down.
 func (s *Service) search(ctx context.Context, query string, files []domain.RepositoryFile, maxOutput int) SearchResponse {
-	return s.searchWith(ctx, query, files, maxOutput, nil)
+	return s.searchWith(ctx, query, files, maxOutput, nil, nil)
 }
 
-// searchWith is search with an optionally pre-started query embed: the
-// large-workspace prefilter already needed the query vector for its semantic
-// signal, and handing the channel over means one embedding API call per
-// search instead of two.
-func (s *Service) searchWith(ctx context.Context, query string, files []domain.RepositoryFile, maxOutput int, embedCh <-chan queryEmbedResult) SearchResponse {
+// searchWith is search with an optionally pre-started query embed and term
+// expansion: the large-workspace prefilter already needed the query vector for
+// its semantic signal, and handing the channel over means one embedding API
+// call per search instead of two; the expansion is started before the
+// prefilter so its LLM latency overlaps it.
+func (s *Service) searchWith(ctx context.Context, query string, files []domain.RepositoryFile, maxOutput int, embedCh <-chan queryEmbedResult, expandCh <-chan queryExpansion) SearchResponse {
 	started := time.Now()
 	deadline := started.Add(searchBudget)
 	// The query embedding is a network round trip (hundreds of ms against a
@@ -793,8 +801,7 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 	// the lexical/structural paths can't use; expansion starts concurrently
 	// with everything below. Terms feed recall, while a faithful English
 	// restatement preserves the query's operations and scope for reranking.
-	var expandCh <-chan queryExpansion
-	if needsTermExpansion(query) {
+	if expandCh == nil && needsTermExpansion(query) {
 		expandCh = s.startTermExpand(ctx, query)
 	}
 	candidates := s.collectCandidates(ctx, files)
