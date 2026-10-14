@@ -909,7 +909,10 @@ func (s *Server) aceSearch(w http.ResponseWriter, r *http.Request) {
 	slog.Info("ace search",
 		"user", currentUser(r).Username, "project", req.ProjectName, "files", len(blobs),
 		"duration_ms", int(result.DurationMS), "prefilter_ms", int(result.PrefilterMS), "degraded", result.Degraded, "missing", result.MissingBlobs,
-		"merged", merged)
+		"merged", merged,
+		"embed_wait_ms", result.Stages.EmbedWaitMS, "expand_wait_ms", result.Stages.ExpandWaitMS, "expand_ready", result.Stages.ExpandReady,
+		"rerank_ms", result.Stages.RerankMS, "rerank_budget_ms", result.Stages.RerankBudgetMS, "reranked", result.Stages.Reranked,
+		"broad", result.Stages.Broad, "broad_ms", result.Stages.BroadMS)
 	s.recordACEUsage(r, "retrieval", int64(result.TokenEstimate))
 	s.bumpQuota(r, "retrieval")
 	writeJSON(w, 200, map[string]any{"formatted_retrieval": result.FormattedRetrieval, "checkpoint_id": checkpointID})

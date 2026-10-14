@@ -95,6 +95,9 @@ func (s *Service) startTermExpand(ctx context.Context, query string) <-chan quer
 				} `json:"message"`
 				FinishReason string `json:"finish_reason"`
 			} `json:"choices"`
+			// OpenRouter names the upstream that served the call; expansion
+			// latency swings with it, so it goes into the log line below.
+			Provider string `json:"provider"`
 		}
 		started := time.Now()
 		ectx, cancel := context.WithTimeout(ctx, expandTTL)
@@ -128,6 +131,7 @@ func (s *Service) startTermExpand(ctx context.Context, query string) <-chan quer
 			"terms", len(expansion.Terms),
 			"restatement_len", len(expansion.RerankQuery),
 			"finish_reason", response.Choices[0].FinishReason,
+			"provider", response.Provider,
 			"ms", time.Since(started).Milliseconds())
 		ch <- expansion
 	}()

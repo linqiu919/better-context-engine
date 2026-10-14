@@ -69,6 +69,23 @@ type SearchResponse struct {
 	// ghosts left by uploads the quota rejected while the client cached its
 	// manifest as sent. Their files are invisible to retrieval.
 	MissingBlobs int `json:"missing_blobs,omitempty"`
+	// Stages breaks the pipeline's wall clock down for the server log only;
+	// it never reaches clients or the search cache.
+	Stages SearchStages `json:"-"`
+}
+
+// SearchStages records where one search spent its time. Budget truncation is
+// silent by design (no cooldown, no warning), so without these a search that
+// lost its rerank round looks identical to a slow one.
+type SearchStages struct {
+	EmbedWaitMS    int  // blocked on the query vector
+	ExpandWaitMS   int  // blocked on term expansion before the first rerank
+	ExpandReady    bool // expansion was in hand for the first rerank
+	RerankBudgetMS int  // budget the first rerank round was given
+	RerankMS       int  // first rerank round, including a skip (≈0) or a truncation (≈budget)
+	Reranked       bool // the first round produced scores
+	Broad          bool
+	BroadMS        int // whole broad stage: decompose wait plus the second rerank
 }
 
 // ModelDefaults carries environment-level model configuration; admin settings
@@ -818,11 +835,14 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 	// queryEmbedWait the pipeline continues without the semantic path (the
 	// in-flight embed still lands in the buffered channel and is discarded;
 	// its own TTL and cooldown are untouched).
+	var stages SearchStages
 	var embedRes queryEmbedResult
+	waitStart := time.Now()
 	select {
 	case embedRes = <-embedCh:
 	case <-time.After(queryEmbedWait):
 	}
+	stages.EmbedWaitMS = int(time.Since(waitStart).Milliseconds())
 	semRank, degraded, inlineEmbedMS := s.semanticRank(ctx, embedRes, candidates, deadline)
 
 	fused := map[int]float64{}
@@ -842,14 +862,17 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 	var expansion queryExpansion
 	if expandCh != nil {
 		wait := min(expandTermWait, time.Until(deadline)-finishReserve)
+		waitStart = time.Now()
 		select {
 		case expansion = <-expandCh:
 			expandCh = nil // single write; a second receive would hang
+			stages.ExpandReady = true
 			if len(expansion.Terms) > 0 {
 				s.fuseExpandedTerms(ctx, candidates, expansion.Terms, fused)
 			}
 		case <-time.After(max(wait, 0)):
 		}
+		stages.ExpandWaitMS = int(time.Since(waitStart).Milliseconds())
 	}
 	// Architecture/config-intent queries get the manifest prior in the first
 	// pass: waiting for broad mode would lose it whenever some code chunk
@@ -912,7 +935,11 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 	if decomposeCh != nil {
 		firstBudget -= rerankRoom
 	}
+	rerankStart := time.Now()
 	order, rerankTop, steep, reranked := s.applyRerank(ctx, query, expandQueries(nil), candidates, order, false, firstBudget)
+	stages.RerankBudgetMS = int(firstBudget.Milliseconds())
+	stages.RerankMS = int(time.Since(rerankStart).Milliseconds())
+	stages.Reranked = reranked
 	// A weak head alone no longer engages broad mode: a cliff-shaped head
 	// (steep) means a few chunks directly answer a focused question whose
 	// absolute scores just run low — wiring questions in a repo saturated
@@ -923,7 +950,9 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 		broad = queryLooksBroad(query)
 	}
 	var subQueries []string
+	stages.Broad = broad
 	if broad {
+		broadStart := time.Now()
 		// Second pass, coverage-oriented: sub-query decomposition and the
 		// manifest-file prior fold into the fusion map, the order is rebuilt
 		// (first-pass truncation is void), and the rerank re-runs against the
@@ -971,6 +1000,7 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 		if o, top, _, ok := s.applyRerank(ctx, query, expandQueries(subQueries), candidates, order, true, time.Until(deadline)-finishReserve); ok {
 			order, rerankTop, reranked = o, top, ok
 		}
+		stages.BroadMS = int(time.Since(broadStart).Milliseconds())
 	}
 	// Curation: per-file diversity cap, adjacent-span merging and small-span
 	// padding shape the final context window.
@@ -1039,7 +1069,7 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 		confidence = "low"
 	}
 	formatted := format(selected, related, confidence == "low", broad, degraded)
-	return SearchResponse{FormattedRetrieval: formatted, Hits: selected, RelatedSymbols: related, Confidence: confidence, DurationMS: math.Round(time.Since(started).Seconds()*100000) / 100, InlineEmbedMS: math.Round(inlineEmbedMS*100) / 100, CandidateCount: len(candidates), TokenEstimate: used, Degraded: degraded}
+	return SearchResponse{FormattedRetrieval: formatted, Hits: selected, RelatedSymbols: related, Confidence: confidence, DurationMS: math.Round(time.Since(started).Seconds()*100000) / 100, InlineEmbedMS: math.Round(inlineEmbedMS*100) / 100, CandidateCount: len(candidates), TokenEstimate: used, Degraded: degraded, Stages: stages}
 }
 
 // collectCandidates expands the visible files into chunk-level candidates.
