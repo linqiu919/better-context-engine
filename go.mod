@@ -1,6 +1,6 @@
 module github.com/linqiu919/better-context-engine
 
-go 1.24
+go 1.26
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0

@@ -246,16 +246,16 @@ func (s *Service) bm25Values(ctx context.Context, candidates []*candidate, query
 			termList = append(termList, t)
 		}
 	}
-	indexedIDs := make([]string, 0, len(candidates))
+	indexed := make([]domain.Chunk, 0, len(candidates))
 	for _, c := range candidates {
 		if c.chunk.TokenCount > 0 {
-			indexedIDs = append(indexedIDs, c.chunk.ID)
+			indexed = append(indexed, c.chunk)
 		}
 	}
 	postings := map[string]map[string]int{}
 	usePostings := false
-	if len(indexedIDs) > 0 {
-		if fetched, err := s.store.ChunkPostings(ctx, termList, indexedIDs); err == nil {
+	if len(indexed) > 0 {
+		if fetched, err := s.store.ChunkPostings(ctx, termList, indexed); err == nil {
 			postings, usePostings = fetched, true
 		}
 	}

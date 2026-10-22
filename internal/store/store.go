@@ -61,8 +61,10 @@ type Store interface {
 	// by the embedding pipeline after the chunks themselves were indexed.
 	UpdateChunkSummaries(context.Context, map[string]string) error
 	// ChunkPostings returns term -> chunkID -> tf for the given query terms,
-	// restricted to the given chunk IDs (the visible candidate set).
-	ChunkPostings(context.Context, []string, []string) (map[string]map[string]int, error)
+	// restricted to the given chunks (the visible candidate set). Chunks are
+	// passed whole so the store can key the read by what it indexes on (the
+	// persisted rid) instead of re-resolving text IDs.
+	ChunkPostings(context.Context, []string, []domain.Chunk) (map[string]map[string]int, error)
 	PutEmbeddings(context.Context, []domain.ChunkEmbedding) error
 	// EmbeddingsByChunkIDs returns raw vectors. The scoring hot path is
 	// VectorScores (in-database); this remains for existence checks in the
@@ -73,8 +75,10 @@ type Store interface {
 	// and each candidate chunk's stored vector inside the database (pgvector),
 	// so a search ships one query vector in and gets scalars back instead of
 	// pulling megabytes of float32 out to score in Go. Chunks without a vector
-	// for the model (or with mismatched dims) are simply absent from the map.
-	VectorScores(ctx context.Context, chunkIDs []string, modelID string, query []float32) (map[string]float64, error)
+	// for the model (or with mismatched dims) are simply absent from the map,
+	// which is keyed by chunk ID. Chunks are passed whole so hashed ones are
+	// scored by content_hash directly.
+	VectorScores(ctx context.Context, chunks []domain.Chunk, modelID string, query []float32) (map[string]float64, error)
 	// BlobPaths returns name -> path for the given blob names without loading
 	// or decrypting content: the cheap manifest view the large-workspace
 	// search prefilter works from.

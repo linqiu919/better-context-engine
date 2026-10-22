@@ -641,20 +641,19 @@ func (p *Postgres) ChunksByBlobNames(ctx context.Context, names []string) ([]dom
 	if len(names) == 0 {
 		return []domain.Chunk{}, nil
 	}
-	rows, err := p.db.QueryContext(ctx, `SELECT id,blob_name,seq,symbol,symbol_kind,start_line,end_line,language,token_count,summary,content_hash FROM chunks WHERE blob_name = ANY($1) ORDER BY blob_name,seq`, names)
+	out := []domain.Chunk{}
+	err := p.queryIndexed(ctx, `SELECT id,blob_name,seq,symbol,symbol_kind,start_line,end_line,language,token_count,summary,content_hash,rid FROM chunks WHERE blob_name = ANY($1) ORDER BY blob_name,seq`, []any{names}, func(rows *sql.Rows) error {
+		var c domain.Chunk
+		if err := rows.Scan(&c.ID, &c.BlobName, &c.Seq, &c.Symbol, &c.SymbolKind, &c.StartLine, &c.EndLine, &c.Language, &c.TokenCount, &c.Summary, &c.ContentHash, &c.RID); err != nil {
+			return err
+		}
+		out = append(out, c)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []domain.Chunk{}
-	for rows.Next() {
-		var c domain.Chunk
-		if err := rows.Scan(&c.ID, &c.BlobName, &c.Seq, &c.Symbol, &c.SymbolKind, &c.StartLine, &c.EndLine, &c.Language, &c.TokenCount, &c.Summary, &c.ContentHash); err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // UpdateChunkSummaries backfills LLM summaries after indexing; one
@@ -679,31 +678,38 @@ func (p *Postgres) UpdateChunkSummaries(ctx context.Context, summaries map[strin
 // ChunkPostings returns term -> chunkID -> tf restricted to both the query
 // terms and the visible candidate set, so common terms never pull postings
 // from other repositories or invisible snapshots.
-func (p *Postgres) ChunkPostings(ctx context.Context, terms []string, chunkIDs []string) (map[string]map[string]int, error) {
+func (p *Postgres) ChunkPostings(ctx context.Context, terms []string, chunks []domain.Chunk) (map[string]map[string]int, error) {
 	out := map[string]map[string]int{}
-	if len(terms) == 0 || len(chunkIDs) == 0 {
+	// Postings live in the rid-keyed chunk_postings table. Chunks loaded by
+	// ChunksByBlobNames carry their rid, so the read goes straight to the
+	// (chunk_rid, term) primary key; mapping text IDs through chunks instead
+	// made every search sequentially scan the whole chunks table. The legacy
+	// chunk_terms table was migrated into this one and dropped (v0.1.8/v0.1.9).
+	idByRID := make(map[int64]string, len(chunks))
+	rids := make([]int64, 0, len(chunks))
+	for _, c := range chunks {
+		if c.RID > 0 {
+			idByRID[c.RID] = c.ID
+			rids = append(rids, c.RID)
+		}
+	}
+	if len(terms) == 0 || len(rids) == 0 {
 		return out, nil
 	}
-	// Postings live in the rid-keyed chunk_postings table; callers hold text
-	// chunk IDs, so the query maps them through chunks. The legacy chunk_terms
-	// table was migrated into this one and dropped (v0.1.8/v0.1.9).
-	rows, err := p.db.QueryContext(ctx, `SELECT p.term, c.id, p.tf FROM chunks c JOIN chunk_postings p ON p.chunk_rid = c.rid AND p.term = ANY($1) WHERE c.id = ANY($2)`, terms, chunkIDs)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var term, chunkID string
+	err := p.queryIndexed(ctx, `SELECT term, chunk_rid, tf FROM chunk_postings WHERE chunk_rid = ANY($1) AND term = ANY($2)`, []any{rids, terms}, func(rows *sql.Rows) error {
+		var term string
+		var rid int64
 		var tf int
-		if err := rows.Scan(&term, &chunkID, &tf); err != nil {
-			return nil, err
+		if err := rows.Scan(&term, &rid, &tf); err != nil {
+			return err
 		}
 		if out[term] == nil {
 			out[term] = map[string]int{}
 		}
-		out[term][chunkID] = tf
-	}
-	return out, rows.Err()
+		out[term][idByRID[rid]] = tf
+		return nil
+	})
+	return out, err
 }
 // PutEmbeddings routes each vector by key generation: chunks carrying a
 // content hash store under (content_hash, model) — shared across every chunk
@@ -791,29 +797,64 @@ func (p *Postgres) EmbeddingsByChunkIDs(ctx context.Context, chunkIDs []string, 
 // VectorScores computes inner-product similarity inside the database: one
 // query vector goes in, scalars come out. Dims filtering keeps the operator
 // from erroring on rows embedded under a different dimensionality.
-func (p *Postgres) VectorScores(ctx context.Context, chunkIDs []string, modelID string, query []float32) (map[string]float64, error) {
+//
+// The two keyspaces are queried by the keys the caller already holds: hashed
+// chunks straight against hash_vectors by content_hash (one score fans out to
+// every candidate sharing that text), hash-less ones against chunk_vectors by
+// chunk ID. Joining through chunks to look the hash up made every search
+// sequentially scan the whole chunks table; the legacy branch only runs when
+// a hash-less candidate exists, since PutEmbeddings never writes a legacy row
+// for a hashed chunk.
+func (p *Postgres) VectorScores(ctx context.Context, chunks []domain.Chunk, modelID string, query []float32) (map[string]float64, error) {
 	out := map[string]float64{}
-	if len(chunkIDs) == 0 || len(query) == 0 {
+	if len(chunks) == 0 || len(query) == 0 {
 		return out, nil
 	}
-	rows, err := p.db.QueryContext(ctx, `
-		SELECT c.id, (e.vec <#> $1::vector) * -1 FROM chunks c JOIN hash_vectors e ON e.content_hash=c.content_hash AND e.model_id=$2 AND e.dims=$3 WHERE c.content_hash <> '' AND c.id = ANY($4)
-		UNION ALL
-		SELECT v.chunk_id, (v.vec <#> $1::vector) * -1 FROM chunk_vectors v WHERE v.model_id=$2 AND v.dims=$3 AND v.chunk_id = ANY($4)`,
-		formatVector(query), modelID, len(query), chunkIDs)
-	if err != nil {
-		return nil, err
+	idsByHash := map[string][]string{}
+	hashes := []string{}
+	legacyIDs := []string{}
+	for _, c := range chunks {
+		if c.ContentHash == "" {
+			legacyIDs = append(legacyIDs, c.ID)
+			continue
+		}
+		if _, ok := idsByHash[c.ContentHash]; !ok {
+			hashes = append(hashes, c.ContentHash)
+		}
+		idsByHash[c.ContentHash] = append(idsByHash[c.ContentHash], c.ID)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		var score float64
-		if err := rows.Scan(&id, &score); err != nil {
+	vec := formatVector(query)
+	if len(hashes) > 0 {
+		err := p.queryIndexed(ctx, `SELECT content_hash, (vec <#> $1::vector) * -1 FROM hash_vectors WHERE model_id=$2 AND dims=$3 AND content_hash = ANY($4)`, []any{vec, modelID, len(query), hashes}, func(rows *sql.Rows) error {
+			var hash string
+			var score float64
+			if err := rows.Scan(&hash, &score); err != nil {
+				return err
+			}
+			for _, id := range idsByHash[hash] {
+				out[id] = score
+			}
+			return nil
+		})
+		if err != nil {
 			return nil, err
 		}
-		out[id] = score
 	}
-	return out, rows.Err()
+	if len(legacyIDs) > 0 {
+		err := p.queryIndexed(ctx, `SELECT chunk_id, (vec <#> $1::vector) * -1 FROM chunk_vectors WHERE model_id=$2 AND dims=$3 AND chunk_id = ANY($4)`, []any{vec, modelID, len(query), legacyIDs}, func(rows *sql.Rows) error {
+			var id string
+			var score float64
+			if err := rows.Scan(&id, &score); err != nil {
+				return err
+			}
+			out[id] = score
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // queryNoJIT runs one read query with JIT compilation off for its
@@ -822,13 +863,34 @@ func (p *Postgres) VectorScores(ctx context.Context, chunkIDs []string, modelID 
 // every search paid ~0.5s compiling expressions for queries that execute in
 // 1-2s — JIT pays off for long analytics, never for a latency-bound read.
 func (p *Postgres) queryNoJIT(ctx context.Context, query string, args []any, scan func(*sql.Rows) error) error {
+	return p.queryTuned(ctx, []string{`SET LOCAL jit = off`}, query, args, scan)
+}
+
+// queryIndexed is queryNoJIT for the per-search candidate reads (chunks by
+// blob name, postings by rid, vectors by hash): a few thousand to tens of
+// thousands of keys against tables with millions of rows. At the default
+// random_page_cost of 4 the planner prices that many index probes above a
+// full sequential scan and picks the scan (0.5-1.7s each on production);
+// with a ~99.5% buffer hit rate the probes are really cache reads, so the
+// transaction prices them as such (index plans measured 0.07-0.7s).
+// Deliberately scoped to these reads: the prefilter's whole-workspace scans
+// keep the default costs.
+func (p *Postgres) queryIndexed(ctx context.Context, query string, args []any, scan func(*sql.Rows) error) error {
+	return p.queryTuned(ctx, []string{`SET LOCAL jit = off`, `SET LOCAL random_page_cost = 1.1`}, query, args, scan)
+}
+
+// queryTuned runs one read query in a read-only transaction after applying
+// transaction-local planner settings.
+func (p *Postgres) queryTuned(ctx context.Context, settings []string, query string, args []any, scan func(*sql.Rows) error) error {
 	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `SET LOCAL jit = off`); err != nil {
-		return err
+	for _, set := range settings {
+		if _, err := tx.ExecContext(ctx, set); err != nil {
+			return err
+		}
 	}
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {

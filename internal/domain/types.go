@@ -115,6 +115,11 @@ type Chunk struct {
 	// not. Empty means the chunk predates the hash column and its vectors
 	// live under the legacy per-chunk-ID key.
 	ContentHash string `json:"content_hash,omitempty"`
+	// RID is the database surrogate key chunk_postings is keyed by; zero for
+	// chunks that were never persisted (on-the-fly candidates, the memory
+	// store). Carrying it lets the search path read postings directly instead
+	// of re-resolving text IDs through the chunks table.
+	RID int64 `json:"-"`
 	// Summary is a one-sentence LLM description written by the embedding
 	// pipeline; it enriches the embedding text and rerank documents so
 	// natural-language queries can meet code they do not textually resemble.

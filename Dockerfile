@@ -9,7 +9,7 @@ COPY web ./web
 COPY skills ./skills
 RUN npm run build --prefix ui
 
-FROM golang:1.24-bookworm AS go-build
+FROM golang:1.26-bookworm AS go-build
 # VERSION is injected by the release workflow with the pushed git tag; local
 # builds fall back to the in-source default (internal/version).
 ARG VERSION=v0.0.1

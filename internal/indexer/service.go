@@ -823,13 +823,20 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 	}
 	candidates := s.collectCandidates(ctx, files)
 	// Three retrieval paths fused with reciprocal rank fusion: BM25 over
-	// code-aware tokens, path/symbol structure, and dense vectors.
-	s.bm25Score(ctx, candidates, codeTokens(query))
+	// code-aware tokens, path/symbol structure, and dense vectors. BM25 and
+	// the vector scoring are each a database round trip over the whole
+	// candidate set and independent of each other, so BM25 runs in the
+	// background while the semantic path proceeds; each writes only its own
+	// candidate field (lex vs semantic).
+	lexDone := make(chan struct{})
+	go func() {
+		defer close(lexDone)
+		s.bm25Score(ctx, candidates, codeTokens(query))
+	}()
 	structuralTerms := tokens(query)
 	for _, cand := range candidates {
 		scoreStructural(cand, structuralTerms)
 	}
-	lexRank := rankBy(candidates, func(c *candidate) float64 { return c.lex })
 	structRank := rankBy(candidates, func(c *candidate) float64 { return c.structuralTotal() })
 	// The query vector earns a bounded wait, not an open-ended one: past
 	// queryEmbedWait the pipeline continues without the semantic path (the
@@ -843,7 +850,9 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 	case <-time.After(queryEmbedWait):
 	}
 	stages.EmbedWaitMS = int(time.Since(waitStart).Milliseconds())
-	semRank, degraded, inlineEmbedMS := s.semanticRank(ctx, embedRes, candidates, deadline)
+	semRank, degraded, inlineEmbedMS := s.semanticRank(ctx, embedRes, candidates, deadline, lexDone)
+	<-lexDone
+	lexRank := rankBy(candidates, func(c *candidate) float64 { return c.lex })
 
 	fused := map[int]float64{}
 	for _, rank := range [][]int{lexRank, structRank, semRank} {
@@ -1170,15 +1179,21 @@ func (s *Service) startQueryEmbed(ctx context.Context, query string) <-chan quer
 // vector goes in, scalars come out, so the cost per search is bounded by ID
 // lookups instead of shipping megabytes of float32 to Go — which is also why
 // no application-side ANN structure exists anymore.
-func (s *Service) semanticRank(ctx context.Context, q queryEmbedResult, candidates []*candidate, deadline time.Time) (rank []int, degraded bool, inlineMS float64) {
+//
+// lexDone closes once the concurrent BM25 pass has filled candidate.lex; only
+// the inline backfill reads that field (it embeds the lexical head first), so
+// only that branch waits for it.
+func (s *Service) semanticRank(ctx context.Context, q queryEmbedResult, candidates []*candidate, deadline time.Time, lexDone <-chan struct{}) (rank []int, degraded bool, inlineMS float64) {
 	if !q.ok || len(candidates) == 0 {
 		return nil, true, 0
 	}
 	ids := make([]string, 0, len(candidates))
+	chunks := make([]domain.Chunk, 0, len(candidates))
 	for _, c := range candidates {
 		ids = append(ids, c.chunk.ID)
+		chunks = append(chunks, c.chunk)
 	}
-	scores, err := s.store.VectorScores(ctx, ids, q.cfg.Model, q.vec)
+	scores, err := s.store.VectorScores(ctx, chunks, q.cfg.Model, q.vec)
 	if err != nil {
 		return nil, true, 0
 	}
@@ -1205,6 +1220,7 @@ func (s *Service) semanticRank(ctx context.Context, q queryEmbedResult, candidat
 			vectors = map[string][]float32{}
 		}
 		if len(vectors) < len(missing) {
+			<-lexDone
 			vectors = s.embedCandidatesNow(ctx, q.cfg, candidates, missing, vectors, deadline)
 		}
 		for id, v := range vectors {

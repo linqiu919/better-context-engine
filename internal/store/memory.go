@@ -310,12 +310,12 @@ func (m *Memory) PutChunks(_ context.Context, blobName string, chunks []domain.C
 	}
 	return nil
 }
-func (m *Memory) ChunkPostings(_ context.Context, terms []string, chunkIDs []string) (map[string]map[string]int, error) {
+func (m *Memory) ChunkPostings(_ context.Context, terms []string, chunks []domain.Chunk) (map[string]map[string]int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	allowed := make(map[string]bool, len(chunkIDs))
-	for _, id := range chunkIDs {
-		allowed[id] = true
+	allowed := make(map[string]bool, len(chunks))
+	for _, c := range chunks {
+		allowed[c.ID] = true
 	}
 	out := map[string]map[string]int{}
 	for _, term := range terms {
@@ -397,11 +397,12 @@ func (m *Memory) EmbeddingsByChunkIDs(_ context.Context, chunkIDs []string, mode
 }
 // VectorScores mirrors the in-database pgvector scoring with a plain Go inner
 // product; the memory store has no separation between storage and compute.
-func (m *Memory) VectorScores(_ context.Context, chunkIDs []string, modelID string, query []float32) (map[string]float64, error) {
+func (m *Memory) VectorScores(_ context.Context, chunks []domain.Chunk, modelID string, query []float32) (map[string]float64, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := map[string]float64{}
-	for _, id := range chunkIDs {
+	for _, c := range chunks {
+		id := c.ID
 		v, ok := m.vectorForChunk(id, modelID)
 		if !ok || len(v) != len(query) {
 			continue
