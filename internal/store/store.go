@@ -162,6 +162,11 @@ type Store interface {
 	// ListAllACEProjects is the admin view: every user's archived projects,
 	// owner attribution included.
 	ListAllACEProjects(context.Context, string) ([]domain.ACEProject, error)
+	// ACEProjectTotals is the user-management view: per-user project count
+	// and summed project storage read from the stats cache only (a project
+	// whose stats are not cached yet adds zero bytes). It never triggers a
+	// stats refresh.
+	ACEProjectTotals(context.Context, string) (map[string]domain.ACEProjectTotals, error)
 
 	CreateEvalCase(context.Context, domain.EvalCase) error
 	ListEvalCases(context.Context, string) ([]domain.EvalCase, error)

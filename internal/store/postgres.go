@@ -17,6 +17,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -32,6 +33,12 @@ type Postgres struct {
 	// against them. The background migration drops the tables and clears the
 	// flag once every row is copied into the vector-typed tables.
 	legacyVec atomic.Bool
+	// statsPending queues snapshot_stats refreshes (snapshot ID -> model ID)
+	// for the single background worker; statsRunning is true while it drains.
+	// Requests never compute stats inline, see snapshotStats.
+	statsMu      sync.Mutex
+	statsPending map[string]string
+	statsRunning bool
 }
 
 func NewPostgres(ctx context.Context, databaseURL, encryptionSecret string) (*Postgres, error) {
@@ -49,7 +56,7 @@ func NewPostgres(ctx context.Context, databaseURL, encryptionSecret string) (*Po
 		_ = db.Close()
 		return nil, err
 	}
-	p := &Postgres{db: db, encryptionKey: sha256.Sum256([]byte(encryptionSecret))}
+	p := &Postgres{db: db, encryptionKey: sha256.Sum256([]byte(encryptionSecret)), statsPending: map[string]string{}}
 	if err := p.migrate(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -1146,11 +1153,64 @@ func (p *Postgres) UserOwnsSnapshot(ctx context.Context, userID, snapshotID stri
 		OR EXISTS(SELECT 1 FROM user_checkpoints WHERE user_id=$1 AND snapshot_id=$2)`, userID, snapshotID).Scan(&owned)
 	return owned, err
 }
+// SaveACEProject upserts the project pointer. When the pointer moves to a new
+// snapshot (every edit-then-search mints a checkpoint), the old snapshot's
+// cached stats are copied to the new one as a provisional row so project
+// lists show plausible numbers immediately, and the new row records a
+// complete ancestor (base_snapshot_id) that lets the background refresh
+// compute it as a small delta instead of re-aggregating the whole snapshot.
 func (p *Postgres) SaveACEProject(ctx context.Context, userID string, ref domain.ACEProjectRef) error {
-	_, err := p.db.ExecContext(ctx, `INSERT INTO user_ace_projects(user_id,project_name,branch,worktree,snapshot_id,updated_at) VALUES($1,$2,$3,$4,$5,$6)
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var old string
+	if err := tx.QueryRowContext(ctx, `SELECT snapshot_id FROM user_ace_projects WHERE user_id=$1 AND project_name=$2 AND branch=$3 FOR UPDATE`, userID, ref.Name, ref.Branch).Scan(&old); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO user_ace_projects(user_id,project_name,branch,worktree,snapshot_id,updated_at) VALUES($1,$2,$3,$4,$5,$6)
 		ON CONFLICT(user_id,project_name,branch) DO UPDATE SET snapshot_id=EXCLUDED.snapshot_id, worktree=EXCLUDED.worktree, updated_at=EXCLUDED.updated_at`,
-		userID, ref.Name, ref.Branch, ref.Worktree, ref.SnapshotID, time.Now())
-	return err
+		userID, ref.Name, ref.Branch, ref.Worktree, ref.SnapshotID, time.Now()); err != nil {
+		return err
+	}
+	var seeded []string
+	if old != "" && ref.SnapshotID != "" && old != ref.SnapshotID {
+		// The base is the nearest complete ancestor: the old snapshot itself
+		// when its stats are final, else the base it was itself measured
+		// from. Complete rows never change, so a delta against one is exact.
+		// The epoch timestamp marks the row stale; DO NOTHING keeps a row
+		// the (content-addressed, shared) new snapshot already has.
+		rows, err := tx.QueryContext(ctx, `INSERT INTO snapshot_stats(snapshot_id, model_id, files, bytes, chunks, embedded, complete, updated_at, base_snapshot_id)
+			SELECT $1, model_id, files, bytes, chunks, embedded, false, 'epoch', CASE WHEN complete THEN snapshot_id ELSE base_snapshot_id END
+			FROM snapshot_stats WHERE snapshot_id=$2
+			ON CONFLICT (snapshot_id, model_id) DO NOTHING
+			RETURNING model_id`, ref.SnapshotID, old)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var model string
+			if err := rows.Scan(&model); err != nil {
+				rows.Close()
+				return err
+			}
+			seeded = append(seeded, model)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// Measure the new checkpoint right away while its base is fresh in the
+	// chain; the delta is cheap and keeps later list views on cached rows.
+	for _, model := range seeded {
+		p.queueSnapshotStats(ref.SnapshotID, model)
+	}
+	return nil
 }
 func (p *Postgres) EnsureACEProject(ctx context.Context, userID string, ref domain.ACEProjectRef) (bool, error) {
 	r, err := p.db.ExecContext(ctx, `INSERT INTO user_ace_projects(user_id,project_name,branch,worktree,snapshot_id,updated_at) VALUES($1,$2,$3,$4,'',$5) ON CONFLICT(user_id,project_name,branch) DO NOTHING`,
@@ -1285,6 +1345,25 @@ func (p *Postgres) ListACEProjects(ctx context.Context, userID, modelID string) 
 func (p *Postgres) ListAllACEProjects(ctx context.Context, modelID string) ([]domain.ACEProject, error) {
 	return p.listACEProjects(ctx, "", modelID)
 }
+func (p *Postgres) ACEProjectTotals(ctx context.Context, modelID string) (map[string]domain.ACEProjectTotals, error) {
+	rows, err := p.db.QueryContext(ctx, `SELECT p.user_id, count(*), coalesce(sum(st.bytes),0) FROM user_ace_projects p
+		LEFT JOIN snapshot_stats st ON st.snapshot_id=p.snapshot_id AND st.model_id=$1 GROUP BY p.user_id`, modelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]domain.ACEProjectTotals{}
+	for rows.Next() {
+		var id string
+		var t domain.ACEProjectTotals
+		if err := rows.Scan(&id, &t.Projects, &t.StorageBytes); err != nil {
+			return nil, err
+		}
+		out[id] = t
+	}
+	return out, rows.Err()
+}
+
 // snapshotStatsTTL bounds how stale the cached stats of a still-indexing
 // snapshot may get; completed snapshots never recompute (they are immutable).
 const snapshotStatsTTL = 15 * time.Second
@@ -1293,9 +1372,9 @@ func (p *Postgres) listACEProjects(ctx context.Context, userID, modelID string) 
 	// Per-snapshot aggregates (file/byte/chunk counts and embedding coverage)
 	// are served from the snapshot_stats cache. Snapshots are immutable, so a
 	// snapshot whose coverage reached 100% is final and its row never needs
-	// recomputing; only snapshots still being embedded refresh, at most once
-	// per snapshotStatsTTL. Recomputing everything inline made the project
-	// list (and the overview built on it) a 2-second full aggregate per view.
+	// recomputing; the rest refresh in the background (see snapshotStats), so
+	// a list view is a couple of indexed reads however many checkpoints the
+	// projects churned through.
 	filter := ``
 	args := []any{}
 	if userID != "" {
@@ -1344,81 +1423,170 @@ type snapStat struct {
 	files, bytes, chunks, embedded int64
 }
 
-// snapshotStats returns cached per-snapshot aggregates, recomputing only the
-// snapshots whose cache row is missing or still-incomplete-and-stale.
+// snapshotStats returns the cached per-snapshot aggregates and never computes
+// inside the request: snapshots whose row is missing, or incomplete and older
+// than snapshotStatsTTL, are queued for the background worker and served as
+// they stand (provisional rows seeded by SaveACEProject carry the previous
+// checkpoint's numbers). Computing inline made every admin list view that
+// met a fresh checkpoint pay a multi-second aggregate, and list views fire
+// on every search event.
 func (p *Postgres) snapshotStats(ctx context.Context, snapIDs []string, modelID string) (map[string]snapStat, error) {
 	out := map[string]snapStat{}
-	fresh, err := p.db.QueryContext(ctx, `SELECT snapshot_id, files, bytes, chunks, embedded FROM snapshot_stats
-		WHERE model_id=$1 AND snapshot_id = ANY($2) AND (complete OR updated_at > now() - $3::interval)`,
+	rows, err := p.db.QueryContext(ctx, `SELECT snapshot_id, files, bytes, chunks, embedded, complete OR updated_at > now() - $3::interval FROM snapshot_stats
+		WHERE model_id=$1 AND snapshot_id = ANY($2)`,
 		modelID, snapIDs, fmt.Sprintf("%d seconds", int(snapshotStatsTTL.Seconds())))
 	if err != nil {
 		return nil, err
 	}
-	defer fresh.Close()
-	for fresh.Next() {
+	defer rows.Close()
+	for rows.Next() {
 		var id string
 		var st snapStat
-		if err := fresh.Scan(&id, &st.files, &st.bytes, &st.chunks, &st.embedded); err != nil {
+		var fresh bool
+		if err := rows.Scan(&id, &st.files, &st.bytes, &st.chunks, &st.embedded, &fresh); err != nil {
 			return nil, err
 		}
 		out[id] = st
+		if !fresh {
+			p.queueSnapshotStats(id, modelID)
+		}
 	}
-	if err := fresh.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	stale := make([]string, 0)
 	for _, id := range snapIDs {
 		if _, ok := out[id]; !ok {
-			stale = append(stale, id)
+			p.queueSnapshotStats(id, modelID)
 		}
 	}
-	if len(stale) == 0 {
-		return out, nil
+	return out, nil
+}
+
+// queueSnapshotStats schedules one snapshot's stats refresh. A single worker
+// drains the queue serially: a full aggregate over a 30k-file snapshot costs
+// seconds, and several of them racing on a 2-core host stalled every other
+// request. Queueing an already-pending snapshot is a no-op.
+func (p *Postgres) queueSnapshotStats(snapshotID, modelID string) {
+	p.statsMu.Lock()
+	defer p.statsMu.Unlock()
+	p.statsPending[snapshotID] = modelID
+	if !p.statsRunning {
+		p.statsRunning = true
+		go p.drainSnapshotStats()
 	}
-	// storage_bytes measures ciphertext at rest; large files arrive as
-	// path#chunkNofM pseudo-path blobs, so the file count collapses that
-	// suffix. Aggregated set-based over just the stale snapshots and upserted
-	// back into the cache in the same statement.
-	recomputed, err := p.db.QueryContext(ctx, `WITH blob_stats AS (
-		SELECT sb.snapshot_id,
-			count(DISTINCT split_part(b.path,'#',1)) AS files,
-			coalesce(sum(octet_length(b.content)),0) AS bytes
-		FROM snapshot_blobs sb JOIN blobs b ON b.name=sb.blob_name
-		WHERE sb.snapshot_id = ANY($2)
-		GROUP BY sb.snapshot_id
-	), chunk_stats AS (
-		SELECT sb.snapshot_id,
-			count(*) AS chunks,
-			count(*) FILTER (WHERE cv.chunk_id IS NOT NULL OR hv.content_hash IS NOT NULL) AS embedded
-		FROM snapshot_blobs sb
-		JOIN chunks c ON c.blob_name=sb.blob_name
-		LEFT JOIN chunk_vectors cv ON cv.chunk_id=c.id AND cv.model_id=$1
-		LEFT JOIN hash_vectors hv ON c.content_hash<>'' AND hv.content_hash=c.content_hash AND hv.model_id=$1
-		WHERE sb.snapshot_id = ANY($2)
-		GROUP BY sb.snapshot_id
-	)
-	INSERT INTO snapshot_stats(snapshot_id, model_id, files, bytes, chunks, embedded, complete, updated_at)
-	SELECT s.sid, $1, coalesce(bs.files,0), coalesce(bs.bytes,0), coalesce(cs.chunks,0), coalesce(cs.embedded,0),
-		coalesce(cs.embedded,0) >= coalesce(cs.chunks,0), now()
-	FROM unnest($2::text[]) AS s(sid)
-	LEFT JOIN blob_stats bs ON bs.snapshot_id=s.sid
-	LEFT JOIN chunk_stats cs ON cs.snapshot_id=s.sid
-	ON CONFLICT (snapshot_id, model_id) DO UPDATE SET files=excluded.files, bytes=excluded.bytes,
-		chunks=excluded.chunks, embedded=excluded.embedded, complete=excluded.complete, updated_at=excluded.updated_at
-	RETURNING snapshot_id, files, bytes, chunks, embedded`, modelID, stale)
+}
+
+func (p *Postgres) drainSnapshotStats() {
+	for {
+		p.statsMu.Lock()
+		var id, model string
+		for k, v := range p.statsPending {
+			id, model = k, v
+			break
+		}
+		if id == "" {
+			p.statsRunning = false
+			p.statsMu.Unlock()
+			return
+		}
+		delete(p.statsPending, id)
+		p.statsMu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		if err := p.refreshSnapshotStats(ctx, id, model); err != nil {
+			slog.Warn("snapshot stats refresh failed", "snapshot", id, "err", err)
+		}
+		cancel()
+	}
+}
+
+// refreshSnapshotStats recomputes one snapshot's row. With a complete base
+// ancestor (recorded when the project pointer moved) only the blob-set
+// difference is aggregated: an edit-then-search checkpoint differs from its
+// base by a handful of blobs, so this is milliseconds instead of a pass over
+// every chunk of the snapshot. Because the base is complete, every removed
+// chunk was embedded, and only added chunks need their coverage checked.
+// Without a usable base (first archive, base purged or never finished) it
+// falls back to the full aggregate. Both run with the candidate-read planner
+// settings (see queryIndexed).
+func (p *Postgres) refreshSnapshotStats(ctx context.Context, snapshotID, modelID string) error {
+	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer recomputed.Close()
-	for recomputed.Next() {
-		var id string
-		var st snapStat
-		if err := recomputed.Scan(&id, &st.files, &st.bytes, &st.chunks, &st.embedded); err != nil {
-			return nil, err
+	defer func() { _ = tx.Rollback() }()
+	for _, set := range []string{`SET LOCAL jit = off`, `SET LOCAL random_page_cost = 1.1`} {
+		if _, err := tx.ExecContext(ctx, set); err != nil {
+			return err
 		}
-		out[id] = st
 	}
-	return out, recomputed.Err()
+	var base string
+	var bst snapStat
+	err = tx.QueryRowContext(ctx, `SELECT s.base_snapshot_id, b.files, b.bytes, b.chunks, b.embedded
+		FROM snapshot_stats s JOIN snapshot_stats b ON b.snapshot_id=s.base_snapshot_id AND b.model_id=s.model_id AND b.complete
+		WHERE s.snapshot_id=$1 AND s.model_id=$2 AND s.base_snapshot_id <> ''`, snapshotID, modelID).Scan(&base, &bst.files, &bst.bytes, &bst.chunks, &bst.embedded)
+	switch {
+	case err == nil:
+		var dFiles, dBytes, addChunks, addEmbedded, rmChunks int64
+		err = tx.QueryRowContext(ctx, `WITH added AS (
+			SELECT blob_name FROM snapshot_blobs WHERE snapshot_id=$1 EXCEPT SELECT blob_name FROM snapshot_blobs WHERE snapshot_id=$2
+		), removed AS (
+			SELECT blob_name FROM snapshot_blobs WHERE snapshot_id=$2 EXCEPT SELECT blob_name FROM snapshot_blobs WHERE snapshot_id=$1
+		), ab AS (
+			SELECT split_part(b.path,'#',1) AS lp, octet_length(b.content) AS sz FROM added a JOIN blobs b ON b.name=a.blob_name
+		), rb AS (
+			SELECT split_part(b.path,'#',1) AS lp, octet_length(b.content) AS sz FROM removed r JOIN blobs b ON b.name=r.blob_name
+		), ac AS (
+			SELECT count(*) AS chunks, count(*) FILTER (WHERE cv.chunk_id IS NOT NULL OR hv.content_hash IS NOT NULL) AS embedded
+			FROM added a JOIN chunks c ON c.blob_name=a.blob_name
+			LEFT JOIN chunk_vectors cv ON cv.chunk_id=c.id AND cv.model_id=$3
+			LEFT JOIN hash_vectors hv ON c.content_hash<>'' AND hv.content_hash=c.content_hash AND hv.model_id=$3
+		)
+		SELECT
+			(SELECT count(DISTINCT lp) FROM ab WHERE lp NOT IN (SELECT lp FROM rb)) - (SELECT count(DISTINCT lp) FROM rb WHERE lp NOT IN (SELECT lp FROM ab)),
+			coalesce((SELECT sum(sz) FROM ab),0) - coalesce((SELECT sum(sz) FROM rb),0),
+			(SELECT chunks FROM ac), (SELECT embedded FROM ac),
+			(SELECT count(*) FROM removed r JOIN chunks c ON c.blob_name=r.blob_name)`,
+			snapshotID, base, modelID).Scan(&dFiles, &dBytes, &addChunks, &addEmbedded, &rmChunks)
+		if err != nil {
+			return err
+		}
+		// Pseudo-path blobs (path#chunkNofM) are all renamed when a file's
+		// chunk count changes, so a logical path only appears on one side of
+		// the difference when the file itself was added or removed.
+		st := snapStat{files: bst.files + dFiles, bytes: bst.bytes + dBytes, chunks: bst.chunks - rmChunks + addChunks, embedded: bst.embedded - rmChunks + addEmbedded}
+		if _, err := tx.ExecContext(ctx, `UPDATE snapshot_stats SET files=$3, bytes=$4, chunks=$5, embedded=$6, complete=$6 >= $5, updated_at=now()
+			WHERE snapshot_id=$1 AND model_id=$2`, snapshotID, modelID, st.files, st.bytes, st.chunks, st.embedded); err != nil {
+			return err
+		}
+	case errors.Is(err, sql.ErrNoRows):
+		// storage_bytes measures ciphertext at rest; large files arrive as
+		// path#chunkNofM pseudo-path blobs, so the file count collapses that
+		// suffix. An existing row keeps its base_snapshot_id.
+		if _, err := tx.ExecContext(ctx, `WITH blob_stats AS (
+			SELECT count(DISTINCT split_part(b.path,'#',1)) AS files, coalesce(sum(octet_length(b.content)),0) AS bytes
+			FROM snapshot_blobs sb JOIN blobs b ON b.name=sb.blob_name
+			WHERE sb.snapshot_id = $2
+		), chunk_stats AS (
+			SELECT count(*) AS chunks,
+				count(*) FILTER (WHERE cv.chunk_id IS NOT NULL OR hv.content_hash IS NOT NULL) AS embedded
+			FROM snapshot_blobs sb
+			JOIN chunks c ON c.blob_name=sb.blob_name
+			LEFT JOIN chunk_vectors cv ON cv.chunk_id=c.id AND cv.model_id=$1
+			LEFT JOIN hash_vectors hv ON c.content_hash<>'' AND hv.content_hash=c.content_hash AND hv.model_id=$1
+			WHERE sb.snapshot_id = $2
+		)
+		INSERT INTO snapshot_stats(snapshot_id, model_id, files, bytes, chunks, embedded, complete, updated_at)
+		SELECT $2, $1, bs.files, bs.bytes, cs.chunks, cs.embedded, cs.embedded >= cs.chunks, now()
+		FROM blob_stats bs, chunk_stats cs
+		WHERE EXISTS (SELECT 1 FROM snapshots WHERE id=$2)
+		ON CONFLICT (snapshot_id, model_id) DO UPDATE SET files=excluded.files, bytes=excluded.bytes,
+			chunks=excluded.chunks, embedded=excluded.embedded, complete=excluded.complete, updated_at=excluded.updated_at`, modelID, snapshotID); err != nil {
+			return err
+		}
+	default:
+		return err
+	}
+	return tx.Commit()
 }
 func (p *Postgres) RecordACEUsage(ctx context.Context, userID, endpoint string, units int64) error {
 	_, err := p.db.ExecContext(ctx, `INSERT INTO ace_usage(user_id,day,endpoint,calls,units) VALUES($1,CURRENT_DATE,$2,1,$3) ON CONFLICT(user_id,day,endpoint) DO UPDATE SET calls=ace_usage.calls+1, units=ace_usage.units+EXCLUDED.units`, userID, endpoint, units)
@@ -1793,6 +1961,7 @@ CREATE TABLE IF NOT EXISTS hash_vectors (content_hash text NOT NULL, model_id te
 ALTER TABLE chunk_vectors ADD COLUMN IF NOT EXISTS sketch bit varying;
 ALTER TABLE hash_vectors ADD COLUMN IF NOT EXISTS sketch bit varying;
 CREATE TABLE IF NOT EXISTS snapshot_stats (snapshot_id text NOT NULL REFERENCES snapshots(id) ON DELETE CASCADE, model_id text NOT NULL, files bigint NOT NULL, bytes bigint NOT NULL, chunks bigint NOT NULL, embedded bigint NOT NULL, complete boolean NOT NULL, updated_at timestamptz NOT NULL, PRIMARY KEY(snapshot_id,model_id));
+ALTER TABLE snapshot_stats ADD COLUMN IF NOT EXISTS base_snapshot_id text NOT NULL DEFAULT '';
 ALTER TABLE chunks ADD COLUMN IF NOT EXISTS rid bigint GENERATED BY DEFAULT AS IDENTITY;
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chunks_rid_unique') THEN

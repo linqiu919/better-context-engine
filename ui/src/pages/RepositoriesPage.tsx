@@ -9,14 +9,14 @@ import { Empty } from '../components/Empty'
 import { Pagination } from '../components/Pagination'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { PAGE_SIZE, usePaged } from '../hooks/usePaged'
-import { bytes, compact, formatDate, projectLabel, short } from '../lib/format'
+import { bytes, compact, formatDate, projectLabel } from '../lib/format'
 
 // Lazy: force-graph (canvas + d3 modules) only downloads when a graph opens.
 const ProjectGraphModal = lazy(() => import('../components/ProjectGraphModal'))
 
 // RepositoriesPage lists ACE projects: the user's own (with index status and
-// delete) or, with `admin`, every project across users (with coverage and
-// checkpoint columns).
+// delete) or, with `admin`, every project across users (with owner and
+// coverage columns).
 export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:number}){
   const {t,language}=useI18n()
   const [projects,setProjects]=useState<AceProject[]|null>(null)
@@ -68,7 +68,7 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
           {admin&&<th>{t('Owner')}</th>}
           <th>{t('Files')}</th>
           <th>{t('Context chunks')}</th>
-          {admin?<><th>{t('Vector coverage')}</th><th>{t('Storage')}</th><th>{t('Checkpoint')}</th></>:<><th>{t('Index status')}</th><th>{t('Storage')}</th></>}
+          {admin?<><th>{t('Vector coverage')}</th><th>{t('Storage')}</th></>:<><th>{t('Index status')}</th><th>{t('Storage')}</th></>}
           <th>{t('Last active')}</th>
           {!admin&&<th/>}
         </tr></thead>
@@ -84,7 +84,7 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
           <td>{compact(p.file_count)}</td>
           <td>{compact(p.chunk_count)}</td>
           {admin
-            ?<><td>{p.chunk_count?`${Math.round(p.embedded_count/p.chunk_count*100)}%`:'—'}</td><td>{bytes(p.storage_bytes)}</td><td><code className="inline-code">{short(p.snapshot_id)}</code></td></>
+            ?<><td>{p.chunk_count?`${Math.round(p.embedded_count/p.chunk_count*100)}%`:'—'}</td><td>{bytes(p.storage_bytes)}</td></>
             :<><td>{indexStatus(p)}</td><td>{bytes(p.storage_bytes)}</td></>}
           <td>{formatDate(p.updated_at,language)}</td>
           {!admin&&<td><div className="row-actions">

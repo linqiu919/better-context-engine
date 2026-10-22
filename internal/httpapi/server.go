@@ -1402,7 +1402,7 @@ func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request) {
 	// console shows; the legacy repositories table stays empty under
 	// MCP-only usage. Today's quota consumption rides along so the user list
 	// can render usage against the deployment limits.
-	projects, _ := s.indexer.ListAllACEProjects(r.Context())
+	totals, _ := s.indexer.ACEProjectTotals(r.Context())
 	usage, _ := s.store.QuotaUsageTodayAll(r.Context())
 	type row struct {
 		domain.User
@@ -1414,13 +1414,7 @@ func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]row, 0, len(users))
 	for _, u := range users {
-		x := row{User: u}
-		for _, p := range projects {
-			if p.OwnerID == u.ID {
-				x.Repositories++
-				x.StorageBytes += p.StorageBytes
-			}
-		}
+		x := row{User: u, Repositories: totals[u.ID].Projects, StorageBytes: totals[u.ID].StorageBytes}
 		if used := usage[u.ID]; used != nil {
 			x.RetrievalToday, x.EnhanceToday, x.UploadToday = used["retrieval"], used["enhance"], used["upload"]
 		}

@@ -803,6 +803,18 @@ func (m *Memory) ListAllACEProjects(_ context.Context, modelID string) ([]domain
 	return out, nil
 }
 
+func (m *Memory) ACEProjectTotals(ctx context.Context, modelID string) (map[string]domain.ACEProjectTotals, error) {
+	projects, _ := m.ListAllACEProjects(ctx, modelID)
+	out := map[string]domain.ACEProjectTotals{}
+	for _, p := range projects {
+		t := out[p.OwnerID]
+		t.Projects++
+		t.StorageBytes += p.StorageBytes
+		out[p.OwnerID] = t
+	}
+	return out, nil
+}
+
 // aceProjectStats computes snapshot-derived stats; callers hold m.mu.
 func (m *Memory) aceProjectStats(pr domain.ACEProject, userID, modelID string) domain.ACEProject {
 	pr.OwnerID = userID

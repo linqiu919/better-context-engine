@@ -279,6 +279,13 @@ type ACEUsageDay struct {
 // The ACE protocol carries no project identity (clients send root-relative
 // paths only), so the name is inferred from manifest blobs and stats are
 // computed from the archived snapshot.
+// ACEProjectTotals aggregates one user's archived projects for the admin user
+// list: how many there are and their summed cached storage.
+type ACEProjectTotals struct {
+	Projects     int
+	StorageBytes int64
+}
+
 type ACEProject struct {
 	Name string `json:"name"`
 	// Branch and Worktree come from git-aware bce-tool-rs clients: one row

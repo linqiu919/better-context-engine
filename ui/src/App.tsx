@@ -52,7 +52,11 @@ export default function App(){
   useEffect(()=>{api<AuthConfig>('/api/v1/auth/config').then(setAuthCfg).catch(()=>{})},[])
   useEffect(()=>{const onHash=()=>setEntry(parseEntry());window.addEventListener('hashchange',onHash);return()=>window.removeEventListener('hashchange',onHash)},[])
   useEffect(()=>{document.documentElement.dataset.theme=dark?'dark':'light';localStorage.setItem('bce-theme',dark?'dark':'light')},[dark])
-  useEffect(()=>{if(!auth)return;const stream=new EventSource('/api/v1/events');const update=()=>setRefresh(v=>v+1);['repository.updated','index.completed','index.failed','latency.updated','project.pending'].forEach(e=>stream.addEventListener(e,update));return()=>stream.close()},[auth])
+  // Every search publishes latency.updated, so on a busy server it would
+  // reload the open list page several times a second; it is coalesced to at
+  // most one refresh per 15s (trailing, so the last search still shows).
+  // Indexing and project events stay immediate.
+  useEffect(()=>{if(!auth)return;const stream=new EventSource('/api/v1/events');const update=()=>setRefresh(v=>v+1);let last=0;let timer:number|undefined;const throttled=()=>{if(timer!==undefined)return;const wait=Math.max(0,last+15000-Date.now());timer=window.setTimeout(()=>{timer=undefined;last=Date.now();update()},wait)};['repository.updated','index.completed','index.failed','project.pending'].forEach(e=>stream.addEventListener(e,update));stream.addEventListener('latency.updated',throttled);return()=>{stream.close();if(timer!==undefined)window.clearTimeout(timer)}},[auth])
   const toggleTheme=()=>setDark(v=>!v)
   const signIn=(v:AuthState)=>{setCSRF(v.csrf_token);setAuth(v)}
   const navigate=(next:Page)=>{location.hash=next;setPage(next);setMobileNav(false)}

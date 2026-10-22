@@ -298,7 +298,7 @@ var (
 // message to multipart/alternative so clients that block HTML still read the
 // plain-text part.
 func (s *Server) sendMail(to, subject, textBody, htmlBody string) error {
-	addr := fmt.Sprintf("%s:%d", s.config.SMTPHost, s.config.SMTPPort)
+	addr := net.JoinHostPort(s.config.SMTPHost, strconv.Itoa(s.config.SMTPPort))
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	var conn net.Conn
 	var err error

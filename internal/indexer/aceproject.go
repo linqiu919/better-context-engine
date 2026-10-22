@@ -242,6 +242,12 @@ func (s *Service) ListACEProjects(ctx context.Context, userID string) ([]domain.
 	return s.store.ListACEProjects(ctx, userID, s.embeddingConfig(ctx).Model)
 }
 
+// ACEProjectTotals is the per-user project count and cached storage for the
+// user-management list.
+func (s *Service) ACEProjectTotals(ctx context.Context) (map[string]domain.ACEProjectTotals, error) {
+	return s.store.ACEProjectTotals(ctx, s.embeddingConfig(ctx).Model)
+}
+
 // ListAllACEProjects is the admin view across every user.
 func (s *Service) ListAllACEProjects(ctx context.Context) ([]domain.ACEProject, error) {
 	return s.store.ListAllACEProjects(ctx, s.embeddingConfig(ctx).Model)
