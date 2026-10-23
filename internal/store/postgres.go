@@ -1554,7 +1554,9 @@ func (p *Postgres) refreshSnapshotStats(ctx context.Context, snapshotID, modelID
 		// chunk count changes, so a logical path only appears on one side of
 		// the difference when the file itself was added or removed.
 		st := snapStat{files: bst.files + dFiles, bytes: bst.bytes + dBytes, chunks: bst.chunks - rmChunks + addChunks, embedded: bst.embedded - rmChunks + addEmbedded}
-		if _, err := tx.ExecContext(ctx, `UPDATE snapshot_stats SET files=$3, bytes=$4, chunks=$5, embedded=$6, complete=$6 >= $5, updated_at=now()
+		// The casts are load-bearing: a bare $6 >= $5 deduces text for both
+		// parameters and conflicts with the bigint column assignments.
+		if _, err := tx.ExecContext(ctx, `UPDATE snapshot_stats SET files=$3, bytes=$4, chunks=$5, embedded=$6, complete=$6::bigint >= $5::bigint, updated_at=now()
 			WHERE snapshot_id=$1 AND model_id=$2`, snapshotID, modelID, st.files, st.bytes, st.chunks, st.embedded); err != nil {
 			return err
 		}
