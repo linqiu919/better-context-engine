@@ -9,6 +9,9 @@ import { Slogan } from '../components/Slogan'
 import { FusionArt } from '../components/FusionArt'
 import { LangThemeSwitch } from '../components/LangThemeSwitch'
 import { ClaudeMark, CodexMark, CursorMark, McpMark, VSCodeMark, ZedMark } from '../components/ToolMarks'
+import { NumberRoll } from '../components/NumberRoll'
+import { ToolGroup } from '../components/ToolGroup'
+import { useGlide } from '../hooks/useGlide'
 import { McpConfigPanel } from './McpConfigPanel'
 import { PublicNav, SiteFooter } from './PublicChrome'
 
@@ -31,16 +34,48 @@ export function Landing({onSignIn,dark,toggleTheme}:{onSignIn:()=>void;dark:bool
   // Copy rotation is motion, so it is disabled under reduced-motion (the
   // first set then stays static); the swap animation itself is CSS-gated.
   useEffect(()=>{if(prefersReducedMotion())return;const id=window.setInterval(()=>setCopySet(i=>(i+1)%liveCopySets.length),5200);return()=>window.clearInterval(id)},[])
+  // Choreographed swap: the outgoing set fades up first, then the incoming
+  // one enters line by line. The dots move at once; the copy trails them.
+  const [shownSet,setShownSet]=useState(0)
+  const [copyLeaving,setCopyLeaving]=useState(false)
+  useEffect(()=>{
+    if(copySet===shownSet)return
+    if(prefersReducedMotion()){setShownSet(copySet);return}
+    setCopyLeaving(true)
+    const id=window.setTimeout(()=>{setShownSet(copySet);setCopyLeaving(false)},200)
+    return()=>window.clearTimeout(id)
+  },[copySet,shownSet])
+  // Screens reveal once, when their top crosses the lower fifth of the
+  // viewport (not a ratio threshold: stacked mobile screens can be several
+  // viewports tall): card groups stagger in and the facts roll up from zero.
+  const [seen,setSeen]=useState<Record<string,boolean>>({})
+  useEffect(()=>{
+    const root=pageRef.current
+    if(!root)return
+    const io=new IntersectionObserver(entries=>{
+      const hit=entries.filter(e=>e.isIntersecting).map(e=>e.target.id)
+      if(hit.length)setSeen(s=>({...s,...Object.fromEntries(hit.map(id=>[id,true]))}))
+      entries.forEach(e=>{if(e.isIntersecting)io.unobserve(e.target)})
+    },{root,rootMargin:'0px 0px -20% 0px'})
+    root.querySelectorAll('.landing-screen[id]').forEach(el=>io.observe(el))
+    return()=>io.disconnect()
+  },[])
+  const screen=(id:string,extra='')=>({id,className:`landing-screen${extra} ${seen[id]?'in-view':''}`})
+  const dots=useGlide<HTMLDivElement>('button',[copySet],{hover:false})
+  const endCells=useGlide<HTMLDivElement>('.end-cell',[])
+  const tools=useGlide<HTMLDivElement>('.tool',[])
   // Anchor scroll stays inside the landing scroll container; location.hash is
   // reserved for login/landing routing, so sections are reached by id.
   const scrollToScreen=(id:string)=>{document.getElementById(id)?.scrollIntoView({behavior:prefersReducedMotion()?'auto':'smooth'})}
   const scrollToTop=()=>{pageRef.current?.scrollTo({top:0,behavior:prefersReducedMotion()?'auto':'smooth'})}
   return <div className="landing-page" ref={pageRef} onScroll={e=>{const top=e.currentTarget.scrollTop;setScrolled(top>24);setShowTop(top>560)}}>
     <PublicNav scrolled={scrolled} onBrand={scrollToTop} brandLabel={t('Back to top')}>
-      <button className="icon-button" onClick={()=>window.open(DOCS_URL,'_blank','noopener')} aria-label={t('Open documentation')} title={t('Open documentation')}><BookOpen size={17}/></button>
-      <button className="icon-button" onClick={()=>{location.hash='mcp'}} aria-label={t('MCP server page')} title={t('MCP server page')}><McpMark/></button>
-      <button className="icon-button" onClick={()=>{location.hash='skill'}} aria-label={t('Agent Skill page')} title={t('Agent Skill page')}><Terminal size={17}/></button>
-      <LangThemeSwitch dark={dark} toggleTheme={toggleTheme}/>
+      <ToolGroup>
+        <button className="icon-button" onClick={()=>window.open(DOCS_URL,'_blank','noopener')} aria-label={t('Open documentation')}><BookOpen size={17}/></button>
+        <button className="icon-button" onClick={()=>{location.hash='mcp'}} aria-label={t('MCP server page')}><McpMark/></button>
+        <button className="icon-button" onClick={()=>{location.hash='skill'}} aria-label={t('Agent Skill page')}><Terminal size={17}/></button>
+        <LangThemeSwitch dark={dark} toggleTheme={toggleTheme}/>
+      </ToolGroup>
       <Button auto scale={0.75} type="secondary" onClick={onSignIn}>{t('Get started')}</Button>
     </PublicNav>
     <main>
@@ -69,7 +104,7 @@ export function Landing({onSignIn,dark,toggleTheme}:{onSignIn:()=>void;dark:bool
           </div>
         </div>
       </section>
-      <section className="landing-screen" id="indexing-screen">
+      <section {...screen('indexing-screen')}>
         <div className="landing-live">
           <div className="index-panel" aria-hidden="true">
             <div className="win-chrome"><i/><i/><i/><span>{t('Live indexing')}</span></div>
@@ -115,24 +150,24 @@ export function Landing({onSignIn,dark,toggleTheme}:{onSignIn:()=>void;dark:bool
             </svg>
           </div>
           <div className="live-copy">
-            <div className="live-copy-set" key={copySet}>
-              <span className="section-eyebrow">{t(liveCopySets[copySet].eyebrow)}</span>
-              <h2>{t(liveCopySets[copySet].title)}</h2>
-              <p className="section-lead">{t(liveCopySets[copySet].lead)}</p>
+            <div className={`live-copy-set ${copyLeaving?'leaving':''}`} key={shownSet}>
+              <span className="section-eyebrow">{t(liveCopySets[shownSet].eyebrow)}</span>
+              <h2>{t(liveCopySets[shownSet].title)}</h2>
+              <p className="section-lead">{t(liveCopySets[shownSet].lead)}</p>
             </div>
-            <div className="copy-dots">{liveCopySets.map((s,i)=><button key={i} type="button" className={i===copySet?'active':''} aria-label={t('Show copy set {n}',{n:i+1})} onClick={()=>setCopySet(i)}/>)}</div>
+            <div className="copy-dots glide" ref={dots.ref}>{dots.layer}{liveCopySets.map((s,i)=><button key={i} type="button" className={i===copySet?'active':''} aria-label={t('Show copy set {n}',{n:i+1})} onClick={()=>setCopySet(i)}/>)}</div>
           </div>
         </div>
       </section>
-      <section className="landing-screen" id="retrieval-screen">
+      <section {...screen('retrieval-screen')}>
         <div className="landing-features">
           <span className="section-eyebrow">{t('Retrieval system')}</span>
           <h2>{t('Three retrieval paths, one answer')}</h2>
           <p className="section-lead">{t('Every query runs three independent recalls in parallel; a reranker then cuts the candidates down to the fragments that actually answer the question.')}</p>
           <div className="landing-facts">
-            <div className="fact path-lex"><strong>3</strong><small>{t('Retrieval paths fused')}</small></div>
-            <div className="fact path-str"><strong>8</strong><small>{t('Languages with AST chunking')}</small></div>
-            <div className="fact path-sem"><strong>1</strong><small>{t('Semantic understanding match')}</small></div>
+            <div className="fact path-lex"><strong><NumberRoll value={seen['retrieval-screen']?3:0}/></strong><small>{t('Retrieval paths fused')}</small></div>
+            <div className="fact path-str"><strong><NumberRoll value={seen['retrieval-screen']?8:0}/></strong><small>{t('Languages with AST chunking')}</small></div>
+            <div className="fact path-sem"><strong><NumberRoll value={seen['retrieval-screen']?1:0}/></strong><small>{t('Semantic understanding match')}</small></div>
           </div>
           <div className="landing-bento">
             <div className="bento-cell"><h3 className="path-lex"><Search size={14}/>{t('Lexical')}</h3><p>{t('BM25 over split identifiers and prefix tokens catches exact functions and variables.')}</p></div>
@@ -142,7 +177,7 @@ export function Landing({onSignIn,dark,toggleTheme}:{onSignIn:()=>void;dark:bool
           </div>
         </div>
       </section>
-      <section className="landing-screen" id="enhance-screen">
+      <section {...screen('enhance-screen')}>
         <div className="landing-enhance">
           <div className="enhance-head">
             <span className="section-eyebrow">{t('Prompt enhancement')}</span>
@@ -166,7 +201,7 @@ export function Landing({onSignIn,dark,toggleTheme}:{onSignIn:()=>void;dark:bool
           </div>
         </div>
       </section>
-      <section className="landing-screen" id="cost-screen">
+      <section {...screen('cost-screen')}>
         <div className="landing-adv">
           <div className="adv-intro">
             <span className="section-eyebrow">{t('Cost structure')}</span>
@@ -197,7 +232,7 @@ export function Landing({onSignIn,dark,toggleTheme}:{onSignIn:()=>void;dark:bool
           <div className="adv-row"><h3>{t('Always up to date')}</h3><p>{t('Edits are indexed as you work, so results always reflect your latest code.')}</p></div>
         </div>
       </section>
-      <section className="landing-screen" id="mcp-screen">
+      <section {...screen('mcp-screen')}>
         <div className="landing-mcp">
           <div className="mcp-copy">
             <span className="section-eyebrow">{t('Getting started')}</span>
@@ -214,7 +249,8 @@ export function Landing({onSignIn,dark,toggleTheme}:{onSignIn:()=>void;dark:bool
         </div>
         <div className="tools-strip">
           <span className="tools-label">{t('Works with your agent tools')}</span>
-          <div className="tools-list">
+          <div className="tools-list glide" ref={tools.ref} {...tools.handlers}>
+            {tools.layer}
             <span className="tool"><CursorMark/>Cursor</span>
             <span className="tool"><ClaudeMark/>Claude Code</span>
             <span className="tool"><CodexMark/>Codex</span>
@@ -223,14 +259,15 @@ export function Landing({onSignIn,dark,toggleTheme}:{onSignIn:()=>void;dark:bool
           </div>
         </div>
       </section>
-      <section className="landing-screen screen-end">
+      <section {...screen('end-screen',' screen-end')}>
         <div className="landing-end">
           <BrandLogo size={36}/>
           <h2>{t('Less context. Sharper answers.')}</h2>
           <p className="end-lead">{t('Hosted in our cloud, ready in minutes — or privately deployed when code must stay in.')}</p>
           <Button auto type="secondary" className="brand-btn" onClick={onSignIn}>{t('Get started')}</Button>
         </div>
-        <div className="end-index">
+        <div className="end-index glide" ref={endCells.ref} {...endCells.handlers}>
+          {endCells.layer}
           <button type="button" className="end-cell" onClick={()=>scrollToScreen('indexing-screen')}><span className="funnel-index">01</span><strong>{t('Live indexing')}</strong><small>{t('Always up to date')}</small><ArrowUpRight size={14}/></button>
           <button type="button" className="end-cell" onClick={()=>scrollToScreen('retrieval-screen')}><span className="funnel-index">02</span><strong>{t('Retrieval system')}</strong><small>{t('Three retrieval paths, one answer')}</small><ArrowUpRight size={14}/></button>
           <button type="button" className="end-cell" onClick={()=>scrollToScreen('enhance-screen')}><span className="funnel-index">03</span><strong>{t('Prompt enhancement')}</strong><small>{t('From a vague question to a precise prompt')}</small><ArrowUpRight size={14}/></button>

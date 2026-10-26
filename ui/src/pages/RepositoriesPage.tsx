@@ -9,6 +9,7 @@ import { Empty } from '../components/Empty'
 import { Pagination } from '../components/Pagination'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { PAGE_SIZE, usePaged } from '../hooks/usePaged'
+import { useLeaving } from '../hooks/useLeaving'
 import { bytes, compact, formatDate, projectLabel } from '../lib/format'
 
 // Lazy: force-graph (canvas + d3 modules) only downloads when a graph opens.
@@ -35,11 +36,17 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
   const [pendingDelete,setPendingDelete]=useState<AceProject|null>(null)
   const [deleting,setDeleting]=useState(false)
   const [deleteError,setDeleteError]=useState('')
+  const rows=useLeaving<HTMLTableSectionElement>()
+  const rowKey=(p:AceProject)=>(p.owner_id||'')+p.name+'\n'+(p.branch||'')
   const closeDelete=()=>{if(deleting)return;setPendingDelete(null);setDeleteError('')}
   const confirmDelete=async()=>{
     if(!pendingDelete)return
     setDeleting(true);setDeleteError('')
-    try{await api(projectPath(pendingDelete),{method:'DELETE'});setPendingDelete(null);load()}
+    const gone=rowKey(pendingDelete)
+    try{
+      await api(projectPath(pendingDelete),{method:'DELETE'});setPendingDelete(null)
+      rows.leave(gone,()=>{setProjects(ps=>ps&&ps.filter(p=>rowKey(p)!==gone));void load()})
+    }
     catch(e){setDeleteError((e as Error).message)}
     finally{setDeleting(false)}
   }
@@ -72,7 +79,7 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
           <th>{t('Last active')}</th>
           {!admin&&<th/>}
         </tr></thead>
-        <tbody>{paged.map(p=><tr key={(p.owner_id||'')+p.name+'\n'+(p.branch||'')}>
+        <tbody ref={rows.ref}>{paged.map(p=><tr key={rowKey(p)} data-key={rowKey(p)} className={rows.leaving===rowKey(p)?'row-leaving':undefined}>
           <td><div className="repo-name"><span className="repo-icon"><Box size={15}/></span><div>
             <strong>{p.name}</strong>
             {(p.branch||p.worktree)&&<small className="repo-meta">

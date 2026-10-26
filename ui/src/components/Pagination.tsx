@@ -1,5 +1,6 @@
 import { useI18n } from '../i18n'
 import { PAGE_SIZE } from '../hooks/usePaged'
+import { useGlide } from '../hooks/useGlide'
 
 function pageNumbers(pages:number,page:number):number[]{
   if(pages<=7)return Array.from({length:pages},(_,i)=>i+1)
@@ -16,10 +17,14 @@ function pageNumbers(pages:number,page:number):number[]{
 export function Pagination({total,page,onChange,size=PAGE_SIZE}:{total:number;page:number;onChange:(p:number)=>void;size?:number}){
   const {t}=useI18n()
   const pages=Math.ceil(total/size)
+  // Light buttons sharing one hover fill; the current-page block slides under
+  // the digits instead of repainting a button.
+  const glide=useGlide<HTMLDivElement>('button',[page,pages,total<=size])
   if(total<=size)return null
   return <div className="pagination">
     <span>{t('{from}–{to} of {total}',{from:(page-1)*size+1,to:Math.min(total,page*size),total})}</span>
-    <div className="pagination-controls">
+    <div className="pagination-controls glide" ref={glide.ref} {...glide.handlers}>
+      {glide.layer}
       <button disabled={page<=1} onClick={()=>onChange(page-1)} aria-label={t('Previous page')}>‹</button>
       {pageNumbers(pages,page).map((p,i)=>p<0?<span key={`gap${i}`} className="pagination-gap">…</span>:<button key={p} className={p===page?'active':''} aria-current={p===page?'page':undefined} onClick={()=>onChange(p)}>{p}</button>)}
       <button disabled={page>=pages} onClick={()=>onChange(page+1)} aria-label={t('Next page')}>›</button>

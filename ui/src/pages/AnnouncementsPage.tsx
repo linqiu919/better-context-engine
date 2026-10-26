@@ -12,7 +12,9 @@ import { Empty } from '../components/Empty'
 import { Pagination } from '../components/Pagination'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { usePaged } from '../hooks/usePaged'
+import { useLeaving } from '../hooks/useLeaving'
 import { formatDate } from '../lib/format'
+import { useGlide } from '../hooks/useGlide'
 
 // manages the history; users see the newest one as a popup after signing in.
 export function AnnouncementsPage(){
@@ -21,6 +23,7 @@ export function AnnouncementsPage(){
   const [title,setTitle]=useState('')
   const [content,setContent]=useState('')
   const [tab,setTab]=useState<'write'|'preview'>('write')
+  const tabGlide=useGlide<HTMLDivElement>('button',[tab],{hover:false})
   const [busy,setBusy]=useState(false)
   const [published,setPublished]=useState(false)
   const [error,setError]=useState('')
@@ -29,6 +32,7 @@ export function AnnouncementsPage(){
   const [deleting,setDeleting]=useState(false)
   const [deleteError,setDeleteError]=useState('')
   const pager=usePaged(items||[])
+  const rows=useLeaving<HTMLTableSectionElement>()
   const load=()=>api<{announcements:Announcement[]}>('/api/v1/admin/announcements').then(v=>setItems(v.announcements||[])).catch(()=>setItems([]))
   useEffect(()=>{void load()},[])
   const publish=async()=>{
@@ -43,8 +47,10 @@ export function AnnouncementsPage(){
     if(!pendingDelete)return
     setDeleting(true);setDeleteError('')
     try{
-      await api(`/api/v1/admin/announcements/${pendingDelete.id}`,{method:'DELETE'})
-      setPendingDelete(null);load()
+      const gone=pendingDelete.id
+      await api(`/api/v1/admin/announcements/${gone}`,{method:'DELETE'})
+      setPendingDelete(null)
+      rows.leave(String(gone),()=>{setItems(v=>v&&v.filter(a=>a.id!==gone));void load()})
     }catch(e){setDeleteError((e as Error).message)}
     finally{setDeleting(false)}
   }
@@ -55,7 +61,7 @@ export function AnnouncementsPage(){
       <div className="announce-form">
         <Setting label={t('Title')}><input value={title} onChange={e=>setTitle(e.target.value)} maxLength={200}/></Setting>
         <div className="announce-editor">
-          <div className="tab-switch"><button className={tab==='write'?'active':''} onClick={()=>setTab('write')}>{t('Write')}</button><button className={tab==='preview'?'active':''} onClick={()=>setTab('preview')}>{t('Preview')}</button></div>
+          <div className="tab-switch glide" ref={tabGlide.ref}>{tabGlide.layer}<button className={tab==='write'?'active':''} onClick={()=>setTab('write')}>{t('Write')}</button><button className={tab==='preview'?'active':''} onClick={()=>setTab('preview')}>{t('Preview')}</button></div>
           {tab==='write'
             ?<textarea value={content} onChange={e=>setContent(e.target.value)} rows={10} placeholder={t('Markdown supported: # headings, **bold**, `code`, lists, links, quotes.')}/>
             :<div className="announce-preview">{content.trim()?<Markdown source={content}/>:<p className="settings-intro">{t('Nothing to preview yet.')}</p>}</div>}
@@ -69,7 +75,7 @@ export function AnnouncementsPage(){
         <div className="data-table-wrap" role="region" tabIndex={0}>
           <table className="data-table">
             <thead><tr><th>{t('Title')}</th><th>{t('Publisher')}</th><th>{t('Published at')}</th><th/></tr></thead>
-            <tbody>{pager.paged.map(a=><tr key={a.id}>
+            <tbody ref={rows.ref}>{pager.paged.map(a=><tr key={a.id} data-key={a.id} className={rows.leaving===String(a.id)?'row-leaving':undefined}>
               <td><strong>{a.title}</strong></td>
               <td>{a.author}</td>
               <td>{formatDate(a.created_at,language)}</td>

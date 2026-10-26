@@ -1,18 +1,18 @@
-/* Palette: "warm paper instrument" — warm-tinted paper neutrals (stone, not
-   blue-gray); the three legend accents (lexical amber / structural teal /
+/* Palette: "neutral paper" — pure neutral grays (no warm or cool tint) so
+   white cards float on a light-gray ground and layering comes from contrast,
+   not tint. The three legend accents (lexical amber / structural teal /
    semantic brand blue) are matched in depth so no path visually outweighs
-   another: amber sits naturally on the warm paper, blue is the deliberate
-   cool counterpoint. Light accents ≈4.5:1 on --bg; dark accents are the
-   same hues lifted to pastel. muted/faint stay ≥ WCAG AA. */
+   another. Light accents ≈4.5:1 on --bg; dark accents are the same hues
+   lifted to pastel. muted/faint stay ≥ WCAG AA. */
 :root {
-  --bg: #faf9f7;
+  --bg: #f5f5f5;
   --surface: #fff;
-  --surface-2: #f4f3f0;
-  --text: #171512;
-  --muted: #5e5a53;
-  --faint: #6f6a62; /* ≥4.5:1 on --bg: smallest labels must stay WCAG AA readable */
-  --line: #e8e6e1;
-  --line-strong: #d8d4cc;
+  --surface-2: #efefef;
+  --text: #171717;
+  --muted: #525252;
+  --faint: #6b6b6b; /* ≥4.5:1 on --bg: smallest labels must stay WCAG AA readable */
+  --line: #e5e5e5;
+  --line-strong: #d4d4d4;
   --inverse: #fff;
   --accent: #000;
   --ok: #0c8a62;
@@ -29,20 +29,20 @@
      Serif for CJK, Georgia/Charter for Latin), no webfont dependency. */
   --font-display: Georgia, "Charter", "Songti SC", "Noto Serif SC", "Source Han Serif SC", "STSong", serif;
   --ease-out: cubic-bezier(.16, 1, .3, 1);
-  --shadow-sm: 0 1px 2px rgb(28 25 20 / .05);
-  --shadow-md: 0 18px 44px -22px rgb(28 25 20 / .22);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / .05);
+  --shadow-md: 0 18px 44px -22px rgb(0 0 0 / .18);
   --glass-hi: rgb(255 255 255 / .5); /* top inner highlight on frosted glass */
   color-scheme: light;
 }
 :root[data-theme="dark"] {
-  --bg: #0d0c0b;
-  --surface: #141312;
-  --surface-2: #1b1a18;
-  --text: #edece9;
-  --muted: #a09d96;
-  --faint: #807d76;
-  --line: #272522;
-  --line-strong: #38352f;
+  --bg: #0a0a0a;
+  --surface: #141414;
+  --surface-2: #1c1c1c;
+  --text: #ededed;
+  --muted: #a3a3a3;
+  --faint: #808080;
+  --line: #262626;
+  --line-strong: #383838;
   --inverse: #000;
   --accent: #fff;
   --ok: #3ecf9a;
@@ -92,6 +92,81 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
   }
+}
+
+/* Motion primitives ("跳跃" / functional motion, after wxad.design/abc).
+   Glide: one shared highlight per group (hooks/useGlide). Pills sit at
+   z-index -1 inside an isolated container, so they paint above the
+   container's own background but under its items; items keep transparent
+   backgrounds and only change color. data-snap = jump without sliding. */
+.glide { position: relative; isolation: isolate; }
+.glide-pill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--gw);
+  height: var(--gh);
+  transform: translate(var(--gx), var(--gy));
+  border-radius: var(--radius-sm);
+  pointer-events: none;
+  z-index: -1;
+  transition: transform .34s var(--ease-out), width .34s var(--ease-out), height .34s var(--ease-out), opacity .18s;
+}
+.glide-pill[data-snap] { transition: opacity .18s; }
+.glide-hover { opacity: 0; }
+.glide-hover[data-on] { opacity: 1; }
+.glide-active:not([data-on]) { opacity: 0; }
+/* Shared tooltip: one bubble under the group, sliding to the hovered item. */
+.glide-tip {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  transform: translateX(calc(var(--tx) - 50%));
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: var(--text);
+  color: var(--bg);
+  font: 11px/1.4 "Geist Sans", "Helvetica Neue", -apple-system, sans-serif;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 60;
+  opacity: 0;
+  transition: transform .3s var(--ease-out), opacity .15s;
+}
+.glide-tip[data-snap] { transition: opacity .15s; }
+.glide-tip[data-on] { opacity: 1; }
+/* NumberRoll: each digit is a 0–9 reel scrolled to its value. */
+.num-roll { display: inline-flex; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.num-slot { display: inline-block; height: 1.2em; line-height: 1.2em; overflow: hidden; }
+.num-reel {
+  display: flex;
+  flex-direction: column;
+  transform: translateY(calc(var(--d) * -1.2em));
+  transition: transform .7s var(--ease-out);
+}
+.num-reel > span { height: 1.2em; }
+.num-roll > span[aria-hidden] { display: inline-flex; line-height: 1.2em; }
+/* Flex items drop collapsible whitespace, so the spaces in "1.2 GB" or
+   "120 ms" need pre to survive. */
+.num-roll > span[aria-hidden] > span { white-space: pre; }
+/* TextSwap: the new label rises in character by character. */
+.text-swap.swapping > span[aria-hidden] { display: inline-block; white-space: pre; }
+@media (prefers-reduced-motion: no-preference) {
+  .text-swap.swapping > span[aria-hidden] {
+    animation: swap-in .34s var(--ease-out) backwards;
+    animation-delay: min(calc(var(--i) * 16ms), 180ms);
+  }
+}
+@keyframes swap-in { from { opacity: 0; transform: translateY(.45em); filter: blur(2px); } }
+/* Deleted table row fades in place before the rows below close the gap. */
+.data-table tbody tr.row-leaving { opacity: 0; transition: opacity .18s ease-out; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 /* Shell: fixed-viewport layout — only .main scrolls, and only when its
@@ -205,15 +280,17 @@ body {
   white-space: nowrap;
 }
 .nav-item svg { flex: 0 0 auto; color: var(--faint); transition: color .15s; }
-.nav-item:hover { background: var(--surface-2); color: var(--text); }
+.nav-item:hover { color: var(--text); }
 .nav-item:hover svg, .nav-item.active svg { color: var(--text); }
 .nav-item.active {
-  background: var(--surface-2);
   color: var(--text);
   font-weight: 500;
 }
-/* Active rail sits at the sidebar's true left edge (item has a 10px inset). */
-.nav-item.active::before {
+/* Hover fill and active block are the shared glide pills (useGlide); the
+   active rail rides on the active pill at the sidebar's true left edge
+   (items have a 10px inset). */
+.sidebar-nav .glide-pill { background: var(--surface-2); }
+.sidebar-nav .glide-active::before {
   content: "";
   position: absolute;
   left: -10px;
@@ -430,6 +507,10 @@ body {
   transition: color .15s, background .15s;
 }
 .language-switch:hover { color: var(--text); background: var(--surface-2); }
+.tool-group { display: flex; align-items: center; gap: 4px; }
+.tool-group .icon-button:hover { border-color: transparent; background: transparent; }
+.tool-group .language-switch:hover { background: transparent; }
+.tool-group .glide-hover { background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); }
 
 /* Page */
 .page-container {
@@ -585,6 +666,7 @@ body {
   margin-bottom: 8px;
 }
 .metric-strip strong {
+  display: block;
   font: 22px var(--font-mono);
   font-weight: 520;
   letter-spacing: -.04em;
@@ -921,22 +1003,20 @@ code::after {
   min-width: 26px;
   height: 26px;
   padding: 0 7px;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: var(--radius-sm);
-  background: var(--surface);
+  background: transparent;
   color: var(--muted);
   font: 11px var(--font-mono);
   cursor: pointer;
+  transition: color .2s var(--ease-out);
 }
-.pagination-controls button:hover:not(:disabled):not(.active) {
-  background: var(--surface-2);
-  color: var(--text);
-}
-.pagination-controls button.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--inverse);
-}
+.pagination-controls button:hover:not(:disabled):not(.active) { color: var(--text); }
+/* The current-page block slides under the digits; the digit color follows
+   with a short fade so it never flips ahead of the block. */
+.pagination-controls button.active { color: var(--inverse); }
+.pagination-controls .glide-hover { background: var(--surface-2); }
+.pagination-controls .glide-active { background: var(--accent); }
 .pagination-controls button:disabled { opacity: .4; cursor: default; }
 .pagination-gap { color: var(--faint); font-size: 11px; padding: 0 2px; }
 .repo-name {
@@ -1490,7 +1570,9 @@ code::after {
 .tab-switch {
   display: flex;
   gap: 18px;
-  border-bottom: 1px solid var(--line);
+  /* Baseline as an inset shadow: the sliding underline (a negative-z glide
+     pill) paints above it, where a border would cover it. */
+  box-shadow: inset 0 -1px var(--line);
   margin-bottom: 16px;
   overflow-x: auto;
 }
@@ -1501,13 +1583,18 @@ code::after {
   font-size: 11px;
   padding: 14px 1px;
   cursor: pointer;
-  border-bottom: 1px solid transparent;
-  margin-bottom: -1px;
   white-space: nowrap;
+  transition: color .2s var(--ease-out);
 }
-.tab-switch button.active {
-  color: var(--text);
-  border-color: var(--text);
+.tab-switch button:hover { color: var(--text); }
+.tab-switch button.active { color: var(--text); }
+.tab-switch .glide-active {
+  top: auto;
+  bottom: 0;
+  height: 1px;
+  border-radius: 0;
+  background: var(--text);
+  transform: translateX(var(--gx));
 }
 .hit-list { display: grid; gap: 11px; }
 .search-hit {
@@ -2340,7 +2427,7 @@ html[lang="en"] .slogan em { font-size: .8em; }
 .path-sem { color: var(--blue); }
 .fact.path-lex strong, .fact.path-str strong, .fact.path-sem strong { color: var(--text); }
 .bento-cell h3.path-lex svg, .bento-cell h3.path-str svg, .bento-cell h3.path-sem svg { color: inherit; }
-/* Brand CTA is a neutral paper button — white card on the warm paper, ink
+/* Brand CTA is a neutral paper button — white card on the gray paper, ink
    text, hairline border; no accent-colored label anywhere. */
 .brand-btn.btn, .landing-page .brand-btn.btn, .login-page .brand-btn.btn {
   background: var(--surface) !important;
@@ -2620,24 +2707,34 @@ html[lang="en"] .slogan em { font-size: .8em; }
   letter-spacing: -.03em;
 }
 .live-copy .section-lead { margin: 0; }
-/* Copy-set rotation: remounting on key change replays the entrance; the
-   dots underneath jump to a set directly. */
+/* Copy-set rotation, choreographed: the outgoing set fades up first
+   (.leaving), then the remounted set enters line by line; the dot capsule
+   slides ahead of the copy. */
 @media (prefers-reduced-motion: no-preference) {
-  .live-copy-set { animation: login-in .5s var(--ease-out) both; }
+  .live-copy-set > * { animation: login-in .5s var(--ease-out) backwards; }
+  .live-copy-set > :nth-child(2) { animation-delay: .06s; }
+  .live-copy-set > :nth-child(3) { animation-delay: .12s; }
+  .live-copy-set.leaving > * {
+    opacity: 0;
+    transform: translateY(-6px);
+    transition: opacity .2s ease-out, transform .2s var(--ease-out);
+  }
 }
 .copy-dots { display: flex; gap: 8px; margin-top: 24px; }
 .copy-dots button {
   width: 6px;
   height: 6px;
   border: 0;
-  border-radius: 50%;
+  border-radius: 3px;
   background: var(--line-strong);
   padding: 0;
   cursor: pointer;
-  transition: background .2s, transform .2s var(--ease-out);
+  transition: background .2s;
 }
 .copy-dots button:hover { background: var(--faint); }
-.copy-dots button.active { background: var(--blue); transform: scale(1.3); }
+/* The active dot widens into a slot; one blue capsule slides between slots. */
+.copy-dots button.active { width: 18px; background: transparent; }
+.copy-dots .glide-active { background: var(--blue); border-radius: 3px; }
 .index-panel {
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -2792,11 +2889,16 @@ html[lang="en"] .slogan em { font-size: .8em; }
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  /* Padding for the shared hover fill, cancelled by the margin so the row
+     keeps its original alignment. */
+  padding: 6px 10px;
+  margin: -6px -10px;
   color: var(--muted);
   font: 11px var(--font-mono);
   letter-spacing: .04em;
   transition: color .15s;
 }
+.tools-list .glide-hover { background: var(--surface); box-shadow: var(--shadow-sm); }
 .tool:hover { color: var(--text); }
 .tool svg { width: 16px; height: 16px; flex: 0 0 auto; }
 .adv-intro h2 {
@@ -2880,19 +2982,17 @@ html[lang="en"] .slogan em { font-size: .8em; }
   gap: 6px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: transparent;
   padding: 18px;
   text-align: left;
   color: var(--text);
   cursor: pointer;
   font-family: inherit;
-  transition: transform .25s var(--ease-out), border-color .25s, box-shadow .25s;
+  transition: border-color .25s;
 }
-.end-cell:hover {
-  transform: translateY(-2px);
-  border-color: var(--line-strong);
-  box-shadow: var(--shadow-sm);
-}
+/* Light cards on the gray paper: one white fill glides between them. */
+.end-cell:hover { border-color: var(--line-strong); }
+.end-index .glide-hover { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
 .end-cell strong { font-size: 14px; letter-spacing: -.015em; }
 .end-cell small { color: var(--muted); font-size: 12px; line-height: 1.5; }
 .end-cell svg {
@@ -2945,8 +3045,8 @@ html[lang="en"] .slogan em { font-size: .8em; }
 .back-top.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
 .back-top:hover { color: var(--text); border-color: var(--line-strong); }
 /* Entry motion mirrors the login screen, staggered element by element.
-   Below-the-fold reveals are a scroll-driven progressive enhancement
-   (Chromium) that collapses to static elsewhere and under reduced motion. */
+   Below-the-fold screens reveal on first sight (IntersectionObserver in
+   Landing, every engine); reduced motion keeps everything static. */
 @media (prefers-reduced-motion: no-preference) {
   .landing-hero-copy h1,
   .landing-hero-copy p,
@@ -2954,18 +3054,21 @@ html[lang="en"] .slogan em { font-size: .8em; }
   .landing-hero-copy p { animation-delay: .07s; }
   .landing-cta { animation-delay: .14s; }
   .hero-console { animation: login-in .55s var(--ease-out) .22s both, console-float 7s ease-in-out 1.6s infinite; }
-  @supports (animation-timeline: view()) {
-    .fact, .bento-cell, .step, .adv-row, .cost-col, .landing-end h2, .tools-strip, .index-panel, .live-copy, .enh-card {
-      animation: login-in linear both;
-      animation-timeline: view();
-      animation-range: entry 0% entry 55%;
-    }
-    .cost-bar span {
-      animation: bar-grow .9s var(--ease-out) both;
-      animation-timeline: view();
-      animation-range: entry 5% entry 70%;
-    }
+  /* Each screen reveals once (Landing marks it .in-view): siblings in a
+     group stagger by --i so a grid reads as one arrival, not N pops. Fill is
+     backwards-only, so hover transforms are untouched once it has played. */
+  .landing-screen:not(.in-view) :is(.fact, .bento-cell, .step, .adv-row, .cost-col, .end-cell, .tool, .index-panel, .live-copy, .enh-card, .enh-arrow, .landing-end h2) { opacity: 0; }
+  .landing-screen.in-view :is(.fact, .bento-cell, .step, .adv-row, .cost-col, .end-cell, .tool, .index-panel, .live-copy, .enh-card, .enh-arrow, .landing-end h2) {
+    animation: login-in .6s var(--ease-out) backwards;
+    animation-delay: calc(var(--i, 0) * 70ms);
   }
+  .landing-screen:not(.in-view) .cost-bar span { transform: scaleX(0); }
+  .landing-screen.in-view .cost-bar span { animation: bar-grow .9s var(--ease-out) .2s backwards; }
+  :is(.landing-facts, .landing-bento, .steps-grid, .end-index, .tools-list, .adv-list, .cost-compare, .enhance-panel, .landing-live) > :nth-child(2) { --i: 1; }
+  :is(.landing-facts, .landing-bento, .steps-grid, .end-index, .tools-list, .adv-list, .cost-compare, .enhance-panel, .landing-live) > :nth-child(3) { --i: 2; }
+  :is(.landing-facts, .landing-bento, .steps-grid, .end-index, .tools-list, .adv-list, .cost-compare, .enhance-panel, .landing-live) > :nth-child(4) { --i: 3; }
+  :is(.landing-facts, .landing-bento, .steps-grid, .end-index, .tools-list, .adv-list, .cost-compare, .enhance-panel, .landing-live) > :nth-child(5) { --i: 4; }
+  :is(.landing-facts, .landing-bento, .steps-grid, .end-index, .tools-list, .adv-list, .cost-compare, .enhance-panel, .landing-live) > :nth-child(n+6) { --i: 5; }
 }
 /* Small or short viewports: one screen can no longer hold a full section
    group, so paging degrades to normal scrolling. 600px (not higher): a

@@ -4,6 +4,7 @@ import { ArrowDown } from '@geist-ui/icons'
 import { useI18n } from '../i18n'
 import { prefersReducedMotion } from '../lib/motion'
 import { LangThemeSwitch } from '../components/LangThemeSwitch'
+import { ToolGroup } from '../components/ToolGroup'
 import { McpConfigPanel } from './McpConfigPanel'
 import { PublicNav, SiteFooter } from './PublicChrome'
 
@@ -27,7 +28,7 @@ export function McpPage({dark,toggleTheme}:{dark:boolean;toggleTheme:()=>void}){
   ]
   return <div className="mcp-page" onScroll={e=>setScrolled(e.currentTarget.scrollTop>24)}>
     <PublicNav scrolled={scrolled} onBrand={goHome} brandLabel={t('Back to home')}>
-      <LangThemeSwitch dark={dark} toggleTheme={toggleTheme}/>
+      <ToolGroup><LangThemeSwitch dark={dark} toggleTheme={toggleTheme}/></ToolGroup>
       <Button auto scale={0.75} type="secondary" onClick={goLogin}>{t('Get started')}</Button>
     </PublicNav>
     <main className="mcp-main">

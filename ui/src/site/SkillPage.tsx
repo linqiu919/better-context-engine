@@ -5,6 +5,9 @@ import { useI18n } from '../i18n'
 import { prefersReducedMotion } from '../lib/motion'
 import { useCopy } from '../hooks/useCopy'
 import { LangThemeSwitch } from '../components/LangThemeSwitch'
+import { ToolGroup } from '../components/ToolGroup'
+import { TextSwap } from '../components/TextSwap'
+import { useGlide } from '../hooks/useGlide'
 import { PublicNav, SiteFooter } from './PublicChrome'
 import skillMd from '../../../skills/bce/SKILL.md?raw'
 
@@ -61,6 +64,7 @@ export function SkillPage({dark,toggleTheme}:{dark:boolean;toggleTheme:()=>void}
   const [copied,copy]=useCopy()
   const [setupCopied,copySetup]=useCopy()
   const [agent,setAgent]=useState(0)
+  const tabGlide=useGlide<HTMLDivElement>('button',[agent],{hover:false})
   const goHome=()=>{location.hash=''}
   const goLogin=()=>{location.hash='login'}
   const goMcp=()=>{location.hash='mcp'}
@@ -73,7 +77,7 @@ export function SkillPage({dark,toggleTheme}:{dark:boolean;toggleTheme:()=>void}
   ]
   return <div className="mcp-page" onScroll={e=>setScrolled(e.currentTarget.scrollTop>24)}>
     <PublicNav scrolled={scrolled} onBrand={goHome} brandLabel={t('Back to home')}>
-      <LangThemeSwitch dark={dark} toggleTheme={toggleTheme}/>
+      <ToolGroup><LangThemeSwitch dark={dark} toggleTheme={toggleTheme}/></ToolGroup>
       <Button auto scale={0.75} type="secondary" onClick={goLogin}>{t('Get started')}</Button>
     </PublicNav>
     <main className="mcp-main">
@@ -126,7 +130,7 @@ export function SkillPage({dark,toggleTheme}:{dark:boolean;toggleTheme:()=>void}
           <pre><code><span className="term-prompt">$ {searchSnippet}</span>{'\n'}<span className="term-ok">✓</span> <span className="term-out">project indexed (incremental)</span>{'\n'}<span className="term-out">&lt;codebase_context&gt; … &lt;/codebase_context&gt;</span></code></pre>
         </div>
         <div className="mcp-panel skill-panel">
-          <div className="win-chrome"><i/><i/><i/><span>skills/bce/SKILL.md</span><Button auto scale={0.55} type="secondary" className="brand-btn" onClick={()=>copy(skillMd)}>{copied?t('Copied'):t('Copy SKILL.md')}</Button><Button auto scale={0.55} type="secondary" className="brand-btn" icon={<Download/>} onClick={downloadSkill}>{t('Download SKILL.md')}</Button></div>
+          <div className="win-chrome"><i/><i/><i/><span>skills/bce/SKILL.md</span><Button auto scale={0.55} type="secondary" className="brand-btn" onClick={()=>copy(skillMd)}><TextSwap text={copied?t('Copied'):t('Copy SKILL.md')}/></Button><Button auto scale={0.55} type="secondary" className="brand-btn" icon={<Download/>} onClick={downloadSkill}>{t('Download SKILL.md')}</Button></div>
           <pre><code>{skillMd}</code></pre>
         </div>
         <div className="param-table path-table">
@@ -139,11 +143,12 @@ export function SkillPage({dark,toggleTheme}:{dark:boolean;toggleTheme:()=>void}
         <span className="section-eyebrow">{t('For your agent')}</span>
         <h2>{t('Or paste one message and let the agent install it')}</h2>
         <p className="section-lead">{t('Pick your tool, copy the message, paste it into the agent chat. It carries the full SKILL.md inline, so the agent writes the file itself, checks your environment variables and runs a first search to verify.')}</p>
-        <div className="tab-switch skill-agent-tabs" role="tablist" aria-label={t('Agent')}>
+        <div className="tab-switch skill-agent-tabs glide" role="tablist" aria-label={t('Agent')} ref={tabGlide.ref}>
+          {tabGlide.layer}
           {skillPaths.map(([name],i)=><button key={name} type="button" role="tab" aria-selected={agent===i} className={agent===i?'active':''} onClick={()=>setAgent(i)}>{name}</button>)}
         </div>
         <div className="mcp-panel skill-panel">
-          <div className="win-chrome"><i/><i/><i/><span>{t('message to your agent')} · {skillPaths[agent][1]}</span><Button auto scale={0.55} type="secondary" className="brand-btn" onClick={()=>copySetup(agentSetup(skillPaths[agent][1]))}>{setupCopied?t('Copied'):t('Copy message')}</Button></div>
+          <div className="win-chrome"><i/><i/><i/><span>{t('message to your agent')} · {skillPaths[agent][1]}</span><Button auto scale={0.55} type="secondary" className="brand-btn" onClick={()=>copySetup(agentSetup(skillPaths[agent][1]))}><TextSwap text={setupCopied?t('Copied'):t('Copy message')}/></Button></div>
           <pre><code>{agentSetup(skillPaths[agent][1])}</code></pre>
         </div>
         <p className="install-note">{t('The message asks the agent to request your token rather than guess it — keep BCE_TOKEN out of the chat if the agent logs conversations.')}</p>

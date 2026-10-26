@@ -10,6 +10,8 @@ import { adminNav, allNav, DOCS_URL, userNav } from './nav'
 import type { AuthState, Page } from './nav'
 import { formatDate } from './lib/format'
 import { NavItem } from './components/NavItem'
+import { ToolGroup } from './components/ToolGroup'
+import { useGlide } from './hooks/useGlide'
 import { LangThemeSwitch } from './components/LangThemeSwitch'
 import { McpMark } from './components/ToolMarks'
 import { Landing } from './site/Landing'
@@ -57,6 +59,9 @@ export default function App(){
   // most one refresh per 15s (trailing, so the last search still shows).
   // Indexing and project events stay immediate.
   useEffect(()=>{if(!auth)return;const stream=new EventSource('/api/v1/events');const update=()=>setRefresh(v=>v+1);let last=0;let timer:number|undefined;const throttled=()=>{if(timer!==undefined)return;const wait=Math.max(0,last+15000-Date.now());timer=window.setTimeout(()=>{timer=undefined;last=Date.now();update()},wait)};['repository.updated','index.completed','index.failed','project.pending'].forEach(e=>stream.addEventListener(e,update));stream.addEventListener('latency.updated',throttled);return()=>{stream.close();if(timer!==undefined)window.clearTimeout(timer)}},[auth])
+  // One active rail + hover fill slides across both nav sections. Called
+  // before the early returns; the deps re-measure once the shell mounts.
+  const navGlide=useGlide<HTMLDivElement>('.nav-item',[page,auth?.user.role,entry,loading,language])
   const toggleTheme=()=>setDark(v=>!v)
   const signIn=(v:AuthState)=>{setCSRF(v.csrf_token);setAuth(v)}
   const navigate=(next:Page)=>{location.hash=next;setPage(next);setMobileNav(false)}
@@ -81,7 +86,8 @@ export default function App(){
     {mobileNav&&<button className="mobile-backdrop" aria-label={t('Close navigation')} onClick={()=>setMobileNav(false)}/>}
     <aside className={`sidebar ${mobileNav?'mobile-open':''}`} aria-label={t('Mobile navigation')}>
       <div className="brand"><BrandLogo size={22}/><div><strong>BCE{authCfg?.version&&<span className="brand-version">{authCfg.version}</span>}</strong><small>BETTER CONTEXT ENGINE</small></div></div>
-      <div className="sidebar-nav">
+      <div className="sidebar-nav glide" ref={navGlide.ref} {...navGlide.handlers}>
+        {navGlide.layer}
         <div className="nav-section"><span>{t('Workspace')}</span>{userNav.map(item=><NavItem key={item.page} {...item} active={page===item.page} onClick={()=>navigate(item.page)}/>)}</div>
         {auth.user.role==='admin'&&<div className="nav-section"><span>{t('Administration')}</span>{adminNav.map(item=><NavItem key={item.page} {...item} active={page===item.page} onClick={()=>navigate(item.page)}/>)}</div>}
       </div>
@@ -105,11 +111,13 @@ export default function App(){
         </div>
         <div className="top-actions">
           <div className="live-state" title={t('Live index telemetry')}><span className="pulse"/><span className="live-label">{t('Live')}</span></div>
-          <button className="icon-button" onClick={showLatestAnnouncement} aria-label={t('View latest announcement')} title={t('View latest announcement')}><Bell size={16}/></button>
-          <button className="icon-button" onClick={()=>window.open(DOCS_URL,'_blank','noopener')} aria-label={t('Open documentation')} title={t('Open documentation')}><BookOpen size={17}/></button>
-          <button className="icon-button" onClick={()=>window.open('#mcp','_blank','noopener')} aria-label={t('MCP server page')} title={t('MCP server page')}><McpMark/></button>
-          <button className="icon-button" onClick={()=>window.open('#skill','_blank','noopener')} aria-label={t('Agent Skill page')} title={t('Agent Skill page')}><Terminal size={17}/></button>
-          <LangThemeSwitch dark={dark} toggleTheme={toggleTheme}/>
+          <ToolGroup>
+            <button className="icon-button" onClick={showLatestAnnouncement} aria-label={t('View latest announcement')}><Bell size={16}/></button>
+            <button className="icon-button" onClick={()=>window.open(DOCS_URL,'_blank','noopener')} aria-label={t('Open documentation')}><BookOpen size={17}/></button>
+            <button className="icon-button" onClick={()=>window.open('#mcp','_blank','noopener')} aria-label={t('MCP server page')}><McpMark/></button>
+            <button className="icon-button" onClick={()=>window.open('#skill','_blank','noopener')} aria-label={t('Agent Skill page')}><Terminal size={17}/></button>
+            <LangThemeSwitch dark={dark} toggleTheme={toggleTheme}/>
+          </ToolGroup>
         </div>
       </header>
       <div className={`page-container page-${page}`}><PageContent page={page} auth={auth} refresh={refresh}/></div>

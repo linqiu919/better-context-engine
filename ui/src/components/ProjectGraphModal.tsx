@@ -134,9 +134,9 @@ export default function ProjectGraphModal({project, branch, onClose}: {project: 
     const colors = {
       behavior: cvar('--blue', '#2f6fed'),
       type: cvar('--warn', '#b45309'),
-      other: cvar('--muted', '#8a8577'),
-      text: cvar('--text', '#1c1a17'),
-      line: cvar('--line-strong', '#d8d3c8'),
+      other: cvar('--muted', '#737373'),
+      text: cvar('--text', '#171717'),
+      line: cvar('--line-strong', '#d4d4d4'),
     }
     const mono = cvar('--font-mono', 'ui-monospace, monospace')
     const fg = new ForceGraph(el)

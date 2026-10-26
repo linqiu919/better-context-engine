@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { BrandLogo } from '../BrandLogo'
 import { useI18n } from '../i18n'
 import { LangThemeSwitch } from '../components/LangThemeSwitch'
+import { ToolGroup } from '../components/ToolGroup'
 import { PublicNav } from '../site/PublicChrome'
 
 // LoginShell is the shared chrome of the sign-in and registration screens:
@@ -12,7 +13,7 @@ export function LoginShell({onBack,dark,toggleTheme,onSubmit,children}:{onBack:(
   const [scrolled,setScrolled]=useState(false)
   return <div className="login-page" onScroll={e=>setScrolled(e.currentTarget.scrollTop>24)}>
     <PublicNav scrolled={scrolled} onBrand={onBack} brandLabel={t('Back to home')}>
-      <LangThemeSwitch dark={dark} toggleTheme={toggleTheme}/>
+      <ToolGroup><LangThemeSwitch dark={dark} toggleTheme={toggleTheme}/></ToolGroup>
     </PublicNav>
     <form className="login-panel" onSubmit={onSubmit}>
       <div className="login-brandlock"><BrandLogo size={30}/><small>BETTER CONTEXT ENGINE</small></div>

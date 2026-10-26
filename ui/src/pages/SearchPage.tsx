@@ -8,6 +8,7 @@ import { PageHeader } from '../components/PageHeader'
 import { Empty } from '../components/Empty'
 import { Score } from '../components/Score'
 import { compact, ms, projectLabel } from '../lib/format'
+import { useGlide } from '../hooks/useGlide'
 
 // SearchPage runs a retrieval against one of the user's ready projects and
 // shows why each fragment was selected (ACE response + ranked hits).
@@ -56,6 +57,7 @@ export function SearchPage(){
 function SearchResults({result}:{result:SearchResponse}){
   const {t}=useI18n()
   const [tab,setTab]=useState<'ranked'|'formatted'>('formatted')
+  const tabGlide=useGlide<HTMLDivElement>('button',[tab],{hover:false})
   return <>
     <div className="result-summary">
       <div><span>{t('Latency')}</span><strong>{ms(result.duration_ms)}</strong></div>
@@ -64,7 +66,8 @@ function SearchResults({result}:{result:SearchResponse}){
       <div><span>{t('Est. tokens')}</span><strong>{compact(result.token_estimate)}</strong></div>
       {result.degraded&&<span className="status-pill warn"><i className="status-dot warn"/><em>{t('DETERMINISTIC FALLBACK')}</em></span>}
     </div>
-    <div className="tab-switch">
+    <div className="tab-switch glide" ref={tabGlide.ref}>
+      {tabGlide.layer}
       <button className={tab==='formatted'?'active':''} onClick={()=>setTab('formatted')}>{t('BCE response')}</button>
       <button className={tab==='ranked'?'active':''} onClick={()=>setTab('ranked')}>{t('Ranked fragments')}</button>
     </div>
