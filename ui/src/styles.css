@@ -655,7 +655,9 @@ body {
 }
 .metric-strip > div:hover { background: var(--surface-2); }
 .metric-strip > div:last-child { border-right: 0; }
-.metric-strip span,
+/* Child-scoped: a bare `.metric-strip span` also caught NumberRoll's digit
+   reels inside the value and shrank them to 10px blocks. */
+.metric-strip > div > span,
 .detail-grid span,
 .result-summary > div > span {
   display: block;
