@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/linqiu919/better-context-engine/internal/domain"
 )
@@ -140,7 +141,48 @@ Rules:
 - Use the codebase context, when provided, to reference concrete files, symbols and behaviors instead of vague descriptions.
 - Add missing but inferable details: affected files, expected behavior, constraints.
 - Keep it concise; do not invent requirements that are not implied.
-- Respond with ONLY the enhanced prompt text, no preamble, no explanations, no markdown fences.`
+- Respond with ONLY the enhanced prompt text, no preamble, no explanations.
+
+Output format — plain text, because it is pasted into input boxes that do not render Markdown:
+- No Markdown syntax: no # headings, no **bold** or *italics*, no backticks, no code fences, no tables, no > quotes.
+- Structure with short section labels ending in a colon on their own line (e.g. the equivalents of "Goal:", "Relevant files:", "Requirements:", "Constraints:" in the prompt's language), and include only the sections that apply.
+- Under a label, list items as "1.", "2.", ... one per line; separate sections with one blank line.
+- Write file paths, symbols and commands as-is, without quotes or backticks.`
+
+// minEnhanceChars is the fewest letters/digits a prompt needs before it is
+// worth enhancing: below it ("1", "a", "ok", "?") retrieval has nothing to
+// match and the model can only guess, so the prompt is returned unchanged.
+const minEnhanceChars = 3
+
+// PromptTooVague reports whether a prompt carries too little content to
+// enhance. Counts letters and digits of any script, so it treats every
+// language alike.
+func PromptTooVague(prompt string) bool {
+	n := 0
+	for _, r := range prompt {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			if n++; n >= minEnhanceChars {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+type skipQueryLLMKey struct{}
+
+// withoutQueryLLM marks a search whose caller runs its own LLM pass over the
+// results (the enhancer), so the query-side LLM helpers — term expansion and
+// broad-mode decomposition — are skipped instead of adding a second model
+// round trip in front of it.
+func withoutQueryLLM(ctx context.Context) context.Context {
+	return context.WithValue(ctx, skipQueryLLMKey{}, true)
+}
+
+func skipQueryLLM(ctx context.Context) bool {
+	skip, _ := ctx.Value(skipQueryLLMKey{}).(bool)
+	return skip
+}
 
 // EnhancePrompt rewrites a raw user prompt via the configured chat model,
 // grounding it in retrieval results from the caller's own last checkpoint
@@ -155,7 +197,7 @@ func (s *Service) EnhancePrompt(ctx context.Context, userID string, ws Workspace
 	}
 	contextBlock := ""
 	if snapshot, err := s.contextSnapshot(ctx, userID, ws); err == nil && len(snapshot.BlobNames) > 0 {
-		if result, err := s.SearchBlobNames(ctx, prompt, snapshot.BlobNames, enhanceContextBudget); err == nil && len(result.Hits) > 0 {
+		if result, err := s.SearchBlobNames(withoutQueryLLM(ctx), prompt, snapshot.BlobNames, enhanceContextBudget); err == nil && len(result.Hits) > 0 {
 			contextBlock = result.FormattedRetrieval
 		}
 	}

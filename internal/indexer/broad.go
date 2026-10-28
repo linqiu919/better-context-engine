@@ -177,7 +177,7 @@ func (s *Service) startDecompose(ctx context.Context, query string) <-chan []str
 	ch := make(chan []string, 1)
 	go func() {
 		cfg := s.enhanceConfig(ctx)
-		if !cfg.enabled() {
+		if !cfg.enabled() || skipQueryLLM(ctx) {
 			ch <- nil
 			return
 		}

@@ -80,7 +80,7 @@ func (s *Service) startTermExpand(ctx context.Context, query string) <-chan quer
 	ch := make(chan queryExpansion, 1)
 	go func() {
 		cfg := s.enhanceConfig(ctx)
-		if !cfg.enabled() {
+		if !cfg.enabled() || skipQueryLLM(ctx) {
 			ch <- queryExpansion{}
 			return
 		}

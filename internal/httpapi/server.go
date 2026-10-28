@@ -954,6 +954,12 @@ func (s *Server) promptEnhance(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "no prompt content in nodes")
 		return
 	}
+	// Too little to enhance ("1", "a", "?"): echo it back without retrieval,
+	// a model call or a quota charge — a rewrite could only guess.
+	if indexer.PromptTooVague(prompt) {
+		writeJSON(w, 200, map[string]any{"text": prompt})
+		return
+	}
 	if !s.enforceQuota(w, r, "enhance", 0) {
 		return
 	}
