@@ -197,8 +197,7 @@ func (s *Service) EnhancePrompt(ctx context.Context, userID string, ws Workspace
 	// Thinking off: prompt rewriting needs no chain-of-thought, and hybrid
 	// models otherwise bill/emit reasoning tokens before any content.
 	body := map[string]any{"model": cfg.Model, "messages": messages, "stream": false}
-	cfg.applyChatOptions(body, url)
-	if err := postJSON(cctx, url+"/chat/completions", cfg.apiKey(), body, &response); err != nil {
+	if err := cfg.postChat(cctx, url, body, &response); err != nil {
 		return "", err
 	}
 	if len(response.Choices) == 0 || strings.TrimSpace(response.Choices[0].Message.Content) == "" {

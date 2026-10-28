@@ -160,8 +160,7 @@ func (s *Service) summarizeChunks(ctx context.Context, cfg EnhanceConfig, chunks
 			}
 			// Hybrid models spend the whole max_tokens budget on <think>
 			// reasoning and return empty content unless suppressed.
-			cfg.applyChatOptions(body, url)
-			if err := postJSON(cctx, url+"/chat/completions", cfg.apiKey(), body, &response); err != nil || len(response.Choices) == 0 {
+			if err := cfg.postChat(cctx, url, body, &response); err != nil || len(response.Choices) == 0 {
 				return
 			}
 			parsed := parseSummaries(response.Choices[0].Message.Content, len(batch))

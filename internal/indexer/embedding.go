@@ -257,12 +257,33 @@ func embedOpenAI(ctx context.Context, cfg EmbeddingConfig, inputs []string, kind
 // content, which silently kills expansion/decomposition/summaries. The
 // reasoning field is gated to OpenRouter because strict OpenAI-compatible
 // gateways (vLLM) can reject unknown top-level parameters outright.
+//
+// Some models (e.g. Gemini 3.x on OpenRouter) cannot turn reasoning off and
+// reject the request with 400. postChat learns those from the error and
+// marks the model in mandatoryReasoning; from then on it gets the smallest
+// reasoning effort instead, with reasoningHeadroom extra output tokens so
+// the thinking does not eat the caller's max_tokens budget for content.
 func disableThinking(body map[string]any, url string) {
 	body["enable_thinking"] = false
-	if isOpenRouter(url) {
+	if !isOpenRouter(url) {
+		return
+	}
+	model, _ := body["model"].(string)
+	if _, ok := mandatoryReasoning.Load(model); !ok {
 		body["reasoning"] = map[string]any{"enabled": false}
+		return
+	}
+	body["reasoning"] = map[string]any{"effort": "minimal", "exclude": true}
+	if n, ok := body["max_tokens"].(int); ok {
+		body["max_tokens"] = n + reasoningHeadroom
 	}
 }
+
+const reasoningHeadroom = 512
+
+// mandatoryReasoning holds model IDs whose endpoint refused reasoning off,
+// learned at runtime so no model list is hard-coded.
+var mandatoryReasoning sync.Map
 
 func isOpenRouter(url string) bool { return strings.Contains(url, "openrouter") }
 
@@ -276,6 +297,24 @@ func (c EnhanceConfig) applyChatOptions(body map[string]any, url string) {
 	if len(c.Providers) > 0 && isOpenRouter(url) {
 		body["provider"] = map[string]any{"order": c.Providers, "allow_fallbacks": true}
 	}
+}
+
+// postChat sends an enhancer-side chat completion: applyChatOptions, then
+// one retry with minimal reasoning when the model turns out to require it.
+// url is the /v1 base.
+func (c EnhanceConfig) postChat(ctx context.Context, url string, body map[string]any, output any) error {
+	c.applyChatOptions(body, url)
+	err := postJSON(ctx, url+"/chat/completions", c.apiKey(), body, output)
+	if err == nil || !isOpenRouter(url) || !strings.Contains(strings.ToLower(err.Error()), "reasoning is mandatory") {
+		return err
+	}
+	// The refusal only happens with reasoning off, so the retry (now minimal
+	// effort) runs at most once per call, also for requests already in flight
+	// when another one learned the model.
+	model, _ := body["model"].(string)
+	mandatoryReasoning.Store(model, true)
+	c.applyChatOptions(body, url)
+	return postJSON(ctx, url+"/chat/completions", c.apiKey(), body, output)
 }
 
 // ParseProviderList splits a stored provider list (comma/newline/space

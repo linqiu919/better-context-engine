@@ -776,7 +776,7 @@ const DefaultMaxOutputTokens = 6400
 const (
 	searchBudget    = 5 * time.Second
 	queryEmbedWait  = 2 * time.Second         // cap on waiting for the query vector
-	expandTermWait  = 1500 * time.Millisecond // cap on waiting for query term expansion
+	expandTermWait  = 3000 * time.Millisecond // cap on waiting for query term expansion
 	rerankMinBudget = 800 * time.Millisecond  // below this a rerank round is not worth firing
 	rerankRoom      = 1800 * time.Millisecond // time other stages leave for a rerank round
 	finishReserve   = 200 * time.Millisecond  // local post-processing tail

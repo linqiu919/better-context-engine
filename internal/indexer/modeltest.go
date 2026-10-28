@@ -125,8 +125,7 @@ func (s *Service) TestLanguageModels(ctx context.Context, rs domain.RetrievalSet
 				"stream":     false,
 				"max_tokens": 16,
 			}
-			cfg.applyChatOptions(body, url)
-			if err := postJSON(ctx, url+"/chat/completions", cfg.apiKey(), body, &response); err != nil {
+			if err := cfg.postChat(ctx, url, body, &response); err != nil {
 				return "", err
 			}
 			if len(response.Choices) == 0 || strings.TrimSpace(response.Choices[0].Message.Content) == "" {
