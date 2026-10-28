@@ -62,10 +62,17 @@ The default endpoint is SiliconFlow (`api.siliconflow.cn/v1`); a single `MODEL_A
 | --- | --- | --- |
 | Embedding | `voyage-code-4` (1024 dims) | Voyage AI |
 | Reranker | `rerank-2.5` (Top-K 50) | Voyage AI |
-| Prompt enhancer | `Qwen/Qwen3.5-9B` | SiliconFlow |
-| Chunk summaries | `Qwen/Qwen3-8B` | SiliconFlow |
+| Prompt enhancer | `google/gemini-3.8-flash` | OpenRouter |
+| Chunk summaries | `google/gemini-3.8-flash` | OpenRouter |
 
 Voyage's code-specialized embedding and rerank models perform noticeably better for code retrieval (embedding and reranker share the `https://api.voyageai.com/v1` endpoint and key; the query/document asymmetry is handled automatically via `input_type`). The enhancer/summary path uses its own provider, configured separately in the admin console under System settings → Retrieval configuration.
+
+#### Choosing the enhancer model
+
+- **One model, several jobs**: besides `/prompt-enhancer` rewrites it also drives term expansion for spaceless-script (e.g. Chinese) queries and broad-query decomposition during search. The summary model shares its endpoint and key, so both must live on the same platform.
+- **Accuracy over speed**: an enhancement is only useful if it names the actual cause (a specific constant, page size, call site) rather than listing generic things to check. In our tests several faster, cheaper models produced rewrites that looked specific but missed the root cause, sometimes even adding constraints that ruled out the right fix. `gemini-3.8-flash` is slower (about 5–10s per enhancement) but in our comparisons it was better at pointing to the root cause, so it is the current recommendation.
+- **Evaluate with real questions whose answer you know**: several questions, several runs each, checking whether the rewrite hits the root cause — not just whether it cites code. One or two samples hide both latency variance and occasional drift.
+- **Mandatory-reasoning models work too**: calls through OpenRouter turn reasoning off; when a model refuses that (e.g. Gemini 3.x), the server retries once with minimal reasoning automatically.
 
 ## Quick start
 
