@@ -870,7 +870,15 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 	// folds in at the broad-mode stage below.
 	var expansion queryExpansion
 	if expandCh != nil {
-		wait := min(expandTermWait, time.Until(deadline)-finishReserve)
+		// The wait yields to the first rerank: it keeps rerankMinBudget for
+		// that round, plus rerankRoom when broad mode is anticipated (the
+		// first pass reserves that much below), so a slow expansion model
+		// can no longer push the rerank under its minimum and skip it.
+		reserve := finishReserve + rerankMinBudget
+		if decomposeCh != nil || degraded || queryWantsStructure(query) {
+			reserve += rerankRoom
+		}
+		wait := min(expandTermWait, time.Until(deadline)-reserve)
 		waitStart = time.Now()
 		select {
 		case expansion = <-expandCh:

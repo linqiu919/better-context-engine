@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -145,7 +146,9 @@ Rules:
 
 Output format — plain text, because it is pasted into input boxes that do not render Markdown:
 - No Markdown syntax: no # headings, no **bold** or *italics*, no backticks, no code fences, no tables, no > quotes.
-- Structure with short section labels ending in a colon on their own line (e.g. the equivalents of "Goal:", "Relevant files:", "Requirements:", "Constraints:" in the prompt's language), and include only the sections that apply.
+- Begin directly with one or two sentences stating the task, with no label or prefix in front of them.
+- After that, structure details under short section labels ending in a colon on their own line (such as relevant files, requirements, constraints), and include only the sections that apply.
+- Every label is written in the same language as the original prompt, even when the codebase context is in English — never English labels in a non-English answer. For a Chinese prompt, labels look like 相关文件：, 具体要求：, 约束：.
 - Under a label, list items as "1.", "2.", ... one per line; separate sections with one blank line.
 - Write file paths, symbols and commands as-is, without quotes or backticks.`
 
@@ -195,12 +198,14 @@ func (s *Service) EnhancePrompt(ctx context.Context, userID string, ws Workspace
 	if !cfg.enabled() {
 		return "", fmt.Errorf("prompt enhancer is not configured: set enhancer_url and enhancer_model")
 	}
+	started := time.Now()
 	contextBlock := ""
 	if snapshot, err := s.contextSnapshot(ctx, userID, ws); err == nil && len(snapshot.BlobNames) > 0 {
 		if result, err := s.SearchBlobNames(withoutQueryLLM(ctx), prompt, snapshot.BlobNames, enhanceContextBudget); err == nil && len(result.Hits) > 0 {
 			contextBlock = result.FormattedRetrieval
 		}
 	}
+	contextMS := time.Since(started).Milliseconds()
 	messages := []map[string]string{{"role": "system", "content": enhanceSystemPrompt}}
 	if len(history) > enhanceHistoryTurns {
 		history = history[len(history)-enhanceHistoryTurns:]
@@ -233,13 +238,29 @@ func (s *Service) EnhancePrompt(ctx context.Context, userID string, ws Workspace
 				Content string `json:"content"`
 			} `json:"message"`
 		} `json:"choices"`
+		Provider string `json:"provider"`
+		Usage    struct {
+			PromptTokens            int `json:"prompt_tokens"`
+			CompletionTokens        int `json:"completion_tokens"`
+			CompletionTokensDetails struct {
+				ReasoningTokens int `json:"reasoning_tokens"`
+			} `json:"completion_tokens_details"`
+		} `json:"usage"`
 	}
 	cctx, cancel := context.WithTimeout(ctx, enhanceTTL)
 	defer cancel()
 	// Thinking off: prompt rewriting needs no chain-of-thought, and hybrid
 	// models otherwise bill/emit reasoning tokens before any content.
 	body := map[string]any{"model": cfg.Model, "messages": messages, "stream": false}
-	if err := cfg.postChat(cctx, url, body, &response); err != nil {
+	modelStart := time.Now()
+	err := cfg.postChat(cctx, url, body, &response)
+	// Stage split for latency triage: context search vs the model call, and
+	// how many of the completion tokens were reasoning.
+	slog.Info("prompt enhance", "context_ms", contextMS, "context_chars", len(contextBlock),
+		"model_ms", time.Since(modelStart).Milliseconds(), "model", cfg.Model, "provider", response.Provider,
+		"prompt_tokens", response.Usage.PromptTokens, "completion_tokens", response.Usage.CompletionTokens,
+		"reasoning_tokens", response.Usage.CompletionTokensDetails.ReasoningTokens, "failed", err != nil)
+	if err != nil {
 		return "", err
 	}
 	if len(response.Choices) == 0 || strings.TrimSpace(response.Choices[0].Message.Content) == "" {
