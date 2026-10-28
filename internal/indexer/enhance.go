@@ -148,7 +148,7 @@ Output format — plain text, because it is pasted into input boxes that do not 
 - No Markdown syntax: no # headings, no **bold** or *italics*, no backticks, no code fences, no tables, no > quotes.
 - Begin directly with one or two sentences stating the task, with no label or prefix in front of them.
 - After that, structure details under short section labels ending in a colon on their own line (such as relevant files, requirements, constraints), and include only the sections that apply.
-- Every label is written in the same language as the original prompt, even when the codebase context is in English — never English labels in a non-English answer. For a Chinese prompt, labels look like 相关文件：, 具体要求：, 约束：.
+- The whole answer, labels included, is written in the language of the original prompt — not the language of these instructions or of the codebase context. An English prompt gets an English answer with labels like "Relevant files:", "Requirements:", "Constraints:"; a Chinese prompt gets a Chinese answer with labels like 相关文件：, 具体要求：, 约束：.
 - Under a label, list items as "1.", "2.", ... one per line; separate sections with one blank line.
 - Write file paths, symbols and commands as-is, without quotes or backticks.`
 
