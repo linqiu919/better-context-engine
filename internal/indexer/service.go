@@ -780,6 +780,7 @@ const (
 	rerankMinBudget = 800 * time.Millisecond  // below this a rerank round is not worth firing
 	rerankRoom      = 1800 * time.Millisecond // time other stages leave for a rerank round
 	finishReserve   = 200 * time.Millisecond  // local post-processing tail
+	expandWaitSlack = 100 * time.Millisecond  // headroom kept above rerankMinBudget by the expansion wait
 )
 
 // search is the retrieval pipeline: chunk-level candidates → three ranking
@@ -874,7 +875,9 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 		// that round, plus rerankRoom when broad mode is anticipated (the
 		// first pass reserves that much below), so a slow expansion model
 		// can no longer push the rerank under its minimum and skip it.
-		reserve := finishReserve + rerankMinBudget
+		// expandWaitSlack covers the local steps between this wait and the
+		// rerank budget check, which otherwise land it a hair under the floor.
+		reserve := finishReserve + rerankMinBudget + expandWaitSlack
 		if decomposeCh != nil || degraded || queryWantsStructure(query) {
 			reserve += rerankRoom
 		}
