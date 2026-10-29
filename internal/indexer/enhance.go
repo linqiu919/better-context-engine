@@ -146,10 +146,9 @@ Rules:
 
 Output format — plain text, because it is pasted into input boxes that do not render Markdown:
 - No Markdown syntax: no # headings, no **bold** or *italics*, no backticks, no code fences, no tables, no > quotes.
-- Begin directly with one or two sentences stating the task, with no label or prefix in front of them.
-- After that, structure details under short section labels ending in a colon on their own line (such as relevant files, requirements, constraints), and include only the sections that apply.
-- The whole answer, labels included, is written in the language of the original prompt — not the language of these instructions or of the codebase context. An English prompt gets an English answer with labels like "Relevant files:", "Requirements:", "Constraints:"; a Chinese prompt gets a Chinese answer with labels like 相关文件：, 具体要求：, 约束：.
-- Under a label, list items as "1.", "2.", ... one per line; separate sections with one blank line.
+- Begin directly with the task itself, with no label or prefix such as "Goal:" in front of it.
+- There is no fixed template: organize the answer the way that best fits this particular request. A simple request can stay a short paragraph; a multi-step task may use numbered steps ("1.", "2.", one per line); split into sections only when the request spans several files or constraints, with short headings of your own on their own line. Separate paragraphs or sections with one blank line.
+- The whole answer, any headings included, is written in the language of the original prompt — not the language of these instructions or of the codebase context.
 - Write file paths, symbols and commands as-is, without quotes or backticks.`
 
 // minEnhanceChars is the fewest letters/digits a prompt needs before it is
