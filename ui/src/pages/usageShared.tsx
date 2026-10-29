@@ -28,11 +28,15 @@ export function UsageTrend({daily,days}:{daily:AceUsageDay[];days:number}){
   const {t,language}=useI18n()
   // Skeleton of every calendar day in the window so quiet days render as gaps
   // instead of collapsing the axis; server rows are keyed by their date part.
+  // Dates are plain calendar days on the server's Beijing-time day boundary:
+  // today is taken in UTC+8, then every day is kept as a UTC-midnight epoch
+  // and labeled in UTC, so no browser zone can shift a bar by a day.
   const byDay=new Map<string,{day:number;retrieval:number;upload:number;enhance:number}>()
-  for(let i=days-1;i>=0;i--){const d=new Date();d.setHours(0,0,0,0);d.setDate(d.getDate()-i);const key=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;byDay.set(key,{day:d.getTime(),retrieval:0,upload:0,enhance:0})}
+  const today=new Date(Date.now()+8*3600000);const base=Date.UTC(today.getUTCFullYear(),today.getUTCMonth(),today.getUTCDate())
+  for(let i=days-1;i>=0;i--){const day=base-i*86400000;byDay.set(new Date(day).toISOString().slice(0,10),{day,retrieval:0,upload:0,enhance:0})}
   for(const row of daily){const slot=byDay.get(row.day.slice(0,10));if(slot&&row.endpoint in slot)slot[row.endpoint as 'retrieval'|'upload'|'enhance']+=row.calls}
   const data=[...byDay.values()]
-  const label=(v:number)=>new Intl.DateTimeFormat(language==='zh'?'zh-CN':'en',{month:'short',day:'2-digit'}).format(v)
+  const label=(v:number)=>new Intl.DateTimeFormat(language==='zh'?'zh-CN':'en',{month:'short',day:'2-digit',timeZone:'UTC'}).format(v)
   return <div className="usage-chart">
     <div className="chart-area">
       {daily.length===0?<div className="chart-empty">{t('No MCP calls recorded yet.')}</div>:
