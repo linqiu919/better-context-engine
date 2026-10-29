@@ -179,6 +179,9 @@ type Store interface {
 	ListJobs(context.Context, string, bool, int) ([]domain.IndexJob, error)
 	RecordMetric(context.Context, domain.MetricPoint) error
 	Metrics(context.Context, string, string, time.Time, int) ([]domain.MetricPoint, error)
+	// UserMetrics returns one user's samples of a metric since the given
+	// time, the most recent limit of them in time order.
+	UserMetrics(ctx context.Context, userID, name string, since time.Time, limit int) ([]domain.MetricPoint, error)
 	// RecordACEUsage increments today's (user, endpoint) aggregate by one call
 	// and the given units; empty user IDs bucket shared-token traffic.
 	RecordACEUsage(context.Context, string, string, int64) error

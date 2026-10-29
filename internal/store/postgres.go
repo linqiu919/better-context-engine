@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1795,8 +1796,25 @@ func itoa(v int) string {
 	return "10"
 }
 func (p *Postgres) RecordMetric(ctx context.Context, m domain.MetricPoint) error {
-	_, err := p.db.ExecContext(ctx, `INSERT INTO metrics(scope,repository_id,name,value,recorded_at) VALUES($1,NULLIF($2,''),$3,$4,$5)`, m.Scope, m.RepositoryID, m.Name, m.Value, m.Timestamp)
+	_, err := p.db.ExecContext(ctx, `INSERT INTO metrics(scope,repository_id,user_id,name,value,recorded_at) VALUES($1,NULLIF($2,''),NULLIF($3,''),$4,$5,$6)`, m.Scope, m.RepositoryID, m.UserID, m.Name, m.Value, m.Timestamp)
 	return err
+}
+func (p *Postgres) UserMetrics(ctx context.Context, userID, name string, since time.Time, limit int) ([]domain.MetricPoint, error) {
+	rows, err := p.db.QueryContext(ctx, `SELECT scope,COALESCE(repository_id,''),user_id,name,value,recorded_at FROM metrics WHERE user_id=$1 AND name=$2 AND recorded_at >= $3 ORDER BY recorded_at DESC LIMIT $4`, userID, name, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.MetricPoint{}
+	for rows.Next() {
+		var m domain.MetricPoint
+		if err := rows.Scan(&m.Scope, &m.RepositoryID, &m.UserID, &m.Name, &m.Value, &m.Timestamp); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	slices.Reverse(out)
+	return out, rows.Err()
 }
 func (p *Postgres) Metrics(ctx context.Context, repo, name string, since time.Time, limit int) ([]domain.MetricPoint, error) {
 	q := `SELECT scope,COALESCE(repository_id,''),name,value,recorded_at FROM metrics WHERE recorded_at >= $1`
@@ -1943,6 +1961,8 @@ CREATE INDEX IF NOT EXISTS index_jobs_owner_idx ON index_jobs(owner_id,created_a
 CREATE TABLE IF NOT EXISTS metrics (id bigserial PRIMARY KEY, scope text NOT NULL, repository_id text REFERENCES repositories(id) ON DELETE CASCADE, name text NOT NULL, value double precision NOT NULL, recorded_at timestamptz NOT NULL);
 CREATE INDEX IF NOT EXISTS metrics_lookup_idx ON metrics(repository_id,name,recorded_at DESC);
 CREATE INDEX IF NOT EXISTS metrics_name_time_idx ON metrics(name,recorded_at DESC);
+ALTER TABLE metrics ADD COLUMN IF NOT EXISTS user_id text;
+CREATE INDEX IF NOT EXISTS metrics_user_name_time_idx ON metrics(user_id,name,recorded_at DESC) WHERE user_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS audit_events (id text PRIMARY KEY, actor_id text NOT NULL, actor text NOT NULL, action text NOT NULL, target_type text NOT NULL, target_id text NOT NULL, result text NOT NULL, metadata jsonb NOT NULL DEFAULT '{}', created_at timestamptz NOT NULL);
 CREATE INDEX IF NOT EXISTS audit_created_idx ON audit_events(created_at DESC);
 CREATE TABLE IF NOT EXISTS system_settings (key text PRIMARY KEY, value text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());

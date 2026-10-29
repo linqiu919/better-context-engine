@@ -151,7 +151,7 @@ type ChunkEmbedding struct {
 // keeps workspace correctness decoupled from index freshness.
 type Snapshot struct {
 	ID           string    `json:"id"`
-	RepositoryID string    `json:"repository_id,omitempty"`
+	RepositoryID string `json:"repository_id,omitempty"`
 	ParentID     string    `json:"parent_id,omitempty"`
 	BlobNames    []string  `json:"blob_names,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -202,11 +202,15 @@ type IndexJob struct {
 }
 
 type MetricPoint struct {
-	Scope        string    `json:"scope"`
-	RepositoryID string    `json:"repository_id,omitempty"`
-	Name         string    `json:"name"`
-	Value        float64   `json:"value"`
-	Timestamp    time.Time `json:"timestamp"`
+	Scope        string `json:"scope"`
+	RepositoryID string `json:"repository_id,omitempty"`
+	// UserID attributes search samples to the caller (empty for shared-token
+	// and background traffic). Never serialized: the site-wide latency chart
+	// returns every user's samples.
+	UserID    string    `json:"-"`
+	Name      string    `json:"name"`
+	Value     float64   `json:"value"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 type AuditEvent struct {

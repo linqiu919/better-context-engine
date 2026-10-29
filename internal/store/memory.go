@@ -1042,6 +1042,21 @@ func (m *Memory) Metrics(_ context.Context, repoID, name string, since time.Time
 	}
 	return out, nil
 }
+func (m *Memory) UserMetrics(_ context.Context, userID, name string, since time.Time, limit int) ([]domain.MetricPoint, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []domain.MetricPoint{}
+	for _, v := range m.metrics {
+		if userID != "" && v.UserID == userID && v.Name == name && !v.Timestamp.Before(since) {
+			out = append(out, v)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Timestamp.Before(out[j].Timestamp) })
+	if limit > 0 && len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return out, nil
+}
 func (m *Memory) CreateAudit(_ context.Context, e domain.AuditEvent) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

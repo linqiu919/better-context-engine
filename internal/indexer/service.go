@@ -704,7 +704,7 @@ func (s *Service) SearchBlobNames(ctx context.Context, query string, names []str
 	// The sample is retrieval time minus one thing: inline embedding of vectors a
 	// fresh upload hasn't backfilled yet is one-off indexing debt, and
 	// counting it made every "first search after upload" a fake P99 outlier.
-	_ = s.store.RecordMetric(ctx, domain.MetricPoint{Scope: "ace", Name: "search_latency_ms", Value: max(0, result.DurationMS-result.InlineEmbedMS), Timestamp: time.Now()})
+	_ = s.store.RecordMetric(ctx, domain.MetricPoint{Scope: "ace", UserID: metricUser(ctx), Name: "search_latency_ms", Value: max(0, result.DurationMS-result.InlineEmbedMS), Timestamp: time.Now()})
 	// Companion samples for the admin analytics page: a 0/1 per search feeds
 	// the hourly degraded-rate curve, and the inline-embedding debt (recorded
 	// only when paid) feeds the first-query cost curve.
@@ -720,6 +720,20 @@ func (s *Service) SearchBlobNames(ctx context.Context, query string, names []str
 	return result, nil
 }
 
+type metricUserKey struct{}
+
+// WithMetricUser attributes the search latency samples recorded under ctx to
+// a user, backing the console's personal latency profile. The HTTP auth
+// layers set it once per request; an empty ID records unattributed samples.
+func WithMetricUser(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, metricUserKey{}, userID)
+}
+
+func metricUser(ctx context.Context) string {
+	id, _ := ctx.Value(metricUserKey{}).(string)
+	return id
+}
+
 // SearchRepository runs retrieval over the repository's current file manifest
 // (the console path) and records the observed latency as a metric.
 func (s *Service) SearchRepository(ctx context.Context, repoID, query string, maxOutput int) (SearchResponse, error) {
@@ -729,7 +743,7 @@ func (s *Service) SearchRepository(ctx context.Context, repoID, query string, ma
 	}
 	start := time.Now()
 	result := s.search(ctx, query, files, maxOutput)
-	_ = s.store.RecordMetric(ctx, domain.MetricPoint{Scope: "repository", RepositoryID: repoID, Name: "search_latency_ms", Value: max(0, result.DurationMS-result.InlineEmbedMS), Timestamp: time.Now()})
+	_ = s.store.RecordMetric(ctx, domain.MetricPoint{Scope: "repository", RepositoryID: repoID, UserID: metricUser(ctx), Name: "search_latency_ms", Value: max(0, result.DurationMS-result.InlineEmbedMS), Timestamp: time.Now()})
 	if repo, err := s.store.RepositoryByID(ctx, repoID); err == nil {
 		repo.SearchP95MS = result.DurationMS
 		repo.UpdatedAt = time.Now()

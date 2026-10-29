@@ -47,7 +47,7 @@ const zh:Record<string,string> = {
   'Index overview':'索引概览','Current retrieval health across your repositories.':'查看名下仓库的实时检索健康状态。',
   'Projects count':'项目数量','Indexed files':'已索引文件','Context chunks':'上下文片段','Storage':'存储空间','Search P95':'检索 P95',
   'Latency profile':'延迟分布','Index health':'索引健康度','Healthy':'健康','Lagging':'滞后','Failed jobs':'失败任务',
-  'Rerank':'重排','LAST 24 HOURS':'最近 24 小时','ALL USERS · LAST 24 HOURS':'全站 · 最近 24 小时',
+  'Rerank':'重排','LAST 24 HOURS':'最近 24 小时','ALL USERS · LAST 24 HOURS':'全站 · 最近 24 小时','Site-wide':'全站','Mine':'我的','Latency scope':'延迟范围','No searches of yours in the last 24 hours.':'最近 24 小时内你还没有检索记录。',
   'Analytics':'数据分析','Hourly retrieval and ingestion telemetry across all users; the data refreshes at most once a minute.':'全站每小时检索与入库遥测；数据最多每分钟刷新一次。','Refresh':'刷新',
   'Latency (retrieval stage)':'延迟分布（检索阶段）','Hourly P95':'每小时 P95','Degraded rate':'降级率','DEGRADED':'次降级','Search volume':'检索量','REQUESTS · 24H':'次请求 · 24 小时','Requests / hour':'每小时请求数',
   'Ingest volume':'入库量','Uploaded / hour':'每小时上传量','Cache hit rate':'缓存命中率','OVERALL':'总体','First-query embedding debt':'首查补嵌耗时','AVG MS PER HOUR':'每小时平均毫秒','Avg inline embed':'平均补嵌耗时','No samples in this window yet.':'该时间窗内暂无样本。','HEALTHY':'健康',

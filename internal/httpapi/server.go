@@ -184,7 +184,7 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			writeError(w, http.StatusForbidden, "invalid CSRF token")
 			return
 		}
-		ctx := context.WithValue(r.Context(), userKey, user)
+		ctx := context.WithValue(indexer.WithMetricUser(r.Context(), user.ID), userKey, user)
 		ctx = context.WithValue(ctx, sessionKey, session)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -209,7 +209,7 @@ func (s *Server) aceAuth(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "invalid ACE token")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey, user)))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(indexer.WithMetricUser(r.Context(), user.ID), userKey, user)))
 	})
 }
 
@@ -1026,7 +1026,13 @@ func (s *Server) adminACEUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) overview(w http.ResponseWriter, r *http.Request) {
-	overview, err := s.buildOverview(r.Context(), currentUser(r).ID, false)
+	// scope=me narrows the latency profile to the caller's own searches; it
+	// never takes a user ID, so nobody can read another user's samples.
+	latencyUser := ""
+	if r.URL.Query().Get("scope") == "me" {
+		latencyUser = currentUser(r).ID
+	}
+	overview, err := s.buildOverview(r.Context(), currentUser(r).ID, false, latencyUser)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -1391,7 +1397,7 @@ func (s *Server) eventStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminOverview(w http.ResponseWriter, r *http.Request) {
-	o, err := s.buildOverview(r.Context(), "", true)
+	o, err := s.buildOverview(r.Context(), "", true, "")
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -1783,7 +1789,9 @@ func (s *Server) authorizedRepo(w http.ResponseWriter, r *http.Request) (domain.
 	}
 	return repo, true
 }
-func (s *Server) buildOverview(ctx context.Context, owner string, all bool) (domain.Overview, error) {
+// latencyUser, when set, limits the latency profile to that user's searches;
+// empty keeps the site-wide profile.
+func (s *Server) buildOverview(ctx context.Context, owner string, all bool, latencyUser string) (domain.Overview, error) {
 	// The console works in ACE projects, so the overview aggregates the same
 	// user_ace_projects rows the project pages show; the legacy repositories
 	// table stays empty when every index arrives through an ACE client.
@@ -1816,7 +1824,13 @@ func (s *Server) buildOverview(ctx context.Context, owner string, all bool) (dom
 			o.FailedJobs++
 		}
 	}
-	metrics, _ := s.store.Metrics(ctx, "", "search_latency_ms", time.Now().Add(-24*time.Hour), 10000)
+	since := time.Now().Add(-24 * time.Hour)
+	var metrics []domain.MetricPoint
+	if latencyUser != "" {
+		metrics, _ = s.store.UserMetrics(ctx, latencyUser, "search_latency_ms", since, 10000)
+	} else {
+		metrics, _ = s.store.Metrics(ctx, "", "search_latency_ms", since, 10000)
+	}
 	values := make([]float64, 0, len(metrics))
 	for _, m := range metrics {
 		values = append(values, m.Value)

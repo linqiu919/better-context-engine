@@ -729,6 +729,31 @@ body {
   max-width: 50%;
 }
 .panel-body { padding: 20px; min-width: 0; }
+/* Segmented scope switch in a panel head: the active segment's block
+   slides under the labels like the pager's current page. */
+.scope-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.scope-switch button {
+  height: 22px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color .2s var(--ease-out);
+}
+.scope-switch button:hover:not(.active) { color: var(--text); }
+.scope-switch button.active { color: var(--text); }
+.scope-switch .glide-active { background: var(--surface); box-shadow: var(--shadow-sm); }
 .latency-chart {
   display: flex;
   flex-direction: column;
