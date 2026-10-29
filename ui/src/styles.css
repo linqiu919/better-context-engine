@@ -3447,6 +3447,11 @@ html[lang="en"] .slogan em { font-size: .8em; }
   .mobile-menu { display: grid; }
   .topbar { padding: 0 14px; }
   .live-label { display: none; }
+  /* Phone-width toolbars run out of room once every icon is in: drop the
+     live pill and the external DeepSeek link, the least-used entries, so
+     the breadcrumb and the primary icons keep their space. */
+  .live-state,
+  .deepseek-link { display: none; }
   .page-container { padding: 24px var(--page-pad) 56px; }
   .page-header {
     flex-direction: column;

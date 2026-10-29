@@ -8,7 +8,7 @@ import { prefersReducedMotion } from '../lib/motion'
 import { Slogan } from '../components/Slogan'
 import { FusionArt } from '../components/FusionArt'
 import { LangThemeSwitch } from '../components/LangThemeSwitch'
-import { ClaudeMark, CodexMark, CursorMark, McpMark, VSCodeMark, ZedMark } from '../components/ToolMarks'
+import { ClaudeMark, CodexMark, CursorMark, DeepSeekLink, McpMark, VSCodeMark, ZedMark } from '../components/ToolMarks'
 import { NumberRoll } from '../components/NumberRoll'
 import { ToolGroup } from '../components/ToolGroup'
 import { useGlide } from '../hooks/useGlide'
@@ -74,6 +74,7 @@ export function Landing({onSignIn,dark,toggleTheme}:{onSignIn:()=>void;dark:bool
         <button className="icon-button" onClick={()=>window.open(DOCS_URL,'_blank','noopener')} aria-label={t('Open documentation')}><BookOpen size={17}/></button>
         <button className="icon-button" onClick={()=>{location.hash='mcp'}} aria-label={t('MCP server page')}><McpMark/></button>
         <button className="icon-button" onClick={()=>{location.hash='skill'}} aria-label={t('Agent Skill page')}><Terminal size={17}/></button>
+        <DeepSeekLink label={t('DeepSeek project')}/>
         <LangThemeSwitch dark={dark} toggleTheme={toggleTheme}/>
       </ToolGroup>
       <Button auto scale={0.75} type="secondary" onClick={onSignIn}>{t('Get started')}</Button>

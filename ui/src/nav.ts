@@ -8,6 +8,7 @@ export type NavEntry = { page:Page; label:string; icon:typeof Archive }
 // External documentation site, opened in a new tab from the landing and
 // console top bars.
 export const DOCS_URL='https://bce-doc.wxnext.top'
+export const DEEPSEEK_URL='https://github.com/linqiu919/dsh-bce'
 
 export const userNav:NavEntry[] = [
   {page:'overview',label:'Overview',icon:BarChart2},

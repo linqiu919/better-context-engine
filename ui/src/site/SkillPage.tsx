@@ -6,6 +6,7 @@ import { prefersReducedMotion } from '../lib/motion'
 import { useCopy } from '../hooks/useCopy'
 import { LangThemeSwitch } from '../components/LangThemeSwitch'
 import { ToolGroup } from '../components/ToolGroup'
+import { DeepSeekLink } from '../components/ToolMarks'
 import { TextSwap } from '../components/TextSwap'
 import { useGlide } from '../hooks/useGlide'
 import { PublicNav, SiteFooter } from './PublicChrome'
@@ -77,7 +78,7 @@ export function SkillPage({dark,toggleTheme}:{dark:boolean;toggleTheme:()=>void}
   ]
   return <div className="mcp-page" onScroll={e=>setScrolled(e.currentTarget.scrollTop>24)}>
     <PublicNav scrolled={scrolled} onBrand={goHome} brandLabel={t('Back to home')}>
-      <ToolGroup><LangThemeSwitch dark={dark} toggleTheme={toggleTheme}/></ToolGroup>
+      <ToolGroup><DeepSeekLink label={t('DeepSeek project')}/><LangThemeSwitch dark={dark} toggleTheme={toggleTheme}/></ToolGroup>
       <Button auto scale={0.75} type="secondary" onClick={goLogin}>{t('Get started')}</Button>
     </PublicNav>
     <main className="mcp-main">

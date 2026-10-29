@@ -13,7 +13,7 @@ import { NavItem } from './components/NavItem'
 import { ToolGroup } from './components/ToolGroup'
 import { useGlide } from './hooks/useGlide'
 import { LangThemeSwitch } from './components/LangThemeSwitch'
-import { McpMark } from './components/ToolMarks'
+import { DeepSeekLink, McpMark } from './components/ToolMarks'
 import { Landing } from './site/Landing'
 import { McpPage } from './site/McpPage'
 import { SkillPage } from './site/SkillPage'
@@ -116,6 +116,7 @@ export default function App(){
             <button className="icon-button" onClick={()=>window.open(DOCS_URL,'_blank','noopener')} aria-label={t('Open documentation')}><BookOpen size={17}/></button>
             <button className="icon-button" onClick={()=>window.open('#mcp','_blank','noopener')} aria-label={t('MCP server page')}><McpMark/></button>
             <button className="icon-button" onClick={()=>window.open('#skill','_blank','noopener')} aria-label={t('Agent Skill page')}><Terminal size={17}/></button>
+            <DeepSeekLink label={t('DeepSeek project')}/>
             <LangThemeSwitch dark={dark} toggleTheme={toggleTheme}/>
           </ToolGroup>
         </div>

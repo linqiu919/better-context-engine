@@ -115,7 +115,7 @@ const zh:Record<string,string> = {
   'Lexical postings, structural symbols and semantic vectors — every code fragment enters all three indexes at once, ready for hybrid recall.':'词法倒排、结构符号、语义向量——每个代码片段同时进入三路索引，为混合召回做好准备。',
   'Show copy set {n}':'切换到第 {n} 组文案',
   'MCP server page':'MCP 服务页','MCP server · Written in Rust':'MCP 服务 · Rust 实现',
-  'Open documentation':'打开文档',
+  'Open documentation':'打开文档','DeepSeek project':'DeepSeek 项目',
   'The purpose-built MCP client for the BCE engine.':'bce-tool 是为 BCE 引擎量身定制的 MCP 工具。',
   'View configuration':'查看配置','MCP tools':'MCP 工具','Retrieval and enhancement, each in its place':'检索与增强，各司其职',
   'Search the codebase with natural language — ask where something lives or how it works.':'用自然语言检索代码库——直接问它在哪里、如何工作。',
