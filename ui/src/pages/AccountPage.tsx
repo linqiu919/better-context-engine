@@ -113,8 +113,8 @@ function RetrievalPrefPanel({user}:{user:User}){
 const PURGE_DAYS=[14,30,60,90]
 type PurgePreview={projects:AceProject[];storage_bytes:number}
 
-// AutoPurgeSection: opt-in background cleanup of projects with no retrieval
-// for N days (PATCH /api/v1/me/settings auto_purge_days, 0 = off; the server
+// AutoPurgeSection: background cleanup of projects with no retrieval
+// for N days (on at 60 by default; PATCH /api/v1/me/settings auto_purge_days, 0 = off; the server
 // sweeps hourly). It sits under the quota bars, so it stays one row tall and
 // saves on change: switching on or picking a window that already catches
 // projects first previews them and asks for confirmation.

@@ -111,7 +111,7 @@ func (s *Server) linuxdoCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		now := time.Now()
-		user = domain.User{ID: identity.NewID("user"), Username: s.uniqueUsername(r.Context(), profile.Username), Role: domain.RoleUser, AvatarURL: profile.avatarURL(), LinuxDoID: profile.ID, LinuxDoUsername: profile.Username, TrustLevel: profile.TrustLevel, CreatedAt: now, LastActiveAt: now}
+		user = domain.User{ID: identity.NewID("user"), Username: s.uniqueUsername(r.Context(), profile.Username), Role: domain.RoleUser, AvatarURL: profile.avatarURL(), LinuxDoID: profile.ID, LinuxDoUsername: profile.Username, TrustLevel: profile.TrustLevel, AutoPurgeDays: domain.DefaultAutoPurgeDays, CreatedAt: now, LastActiveAt: now}
 		if err := s.store.CreateUser(r.Context(), user); err != nil {
 			s.logger.Warn("linuxdo account creation", "error", err)
 			fail("failed to create the account, please retry")

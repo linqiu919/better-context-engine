@@ -2000,6 +2000,7 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS linuxdo_username text NOT NULL DEFAUL
 ALTER TABLE users ADD COLUMN IF NOT EXISTS trust_level integer NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS max_output_tokens integer NOT NULL DEFAULT 0;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS auto_purge_days integer NOT NULL DEFAULT 0;
+ALTER TABLE users ALTER COLUMN auto_purge_days SET DEFAULT 60;
 CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique ON users(email) WHERE email <> '';
 CREATE UNIQUE INDEX IF NOT EXISTS users_linuxdo_id_unique ON users(linuxdo_id) WHERE linuxdo_id <> 0;
 CREATE UNIQUE INDEX IF NOT EXISTS users_ace_token_idx ON users(ace_token_hash) WHERE ace_token_hash <> '';

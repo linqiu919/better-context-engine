@@ -12,8 +12,9 @@ import (
 	"github.com/linqiu919/better-context-engine/internal/store"
 )
 
-// Idle-project auto-purge: a user opts in from the account page and picks a
-// window; projects whose last retrieval is older than that are purged in the
+// Idle-project auto-purge: on by default (domain.DefaultAutoPurgeDays), and
+// the user can change the window or switch it off from the account page;
+// projects whose last retrieval is older than that are purged in the
 // background exactly like a console delete. user_ace_projects.updated_at is
 // the activity signal — every retrieval re-archives the row, so a project
 // that is only searched (never edited) still counts as active. A purged

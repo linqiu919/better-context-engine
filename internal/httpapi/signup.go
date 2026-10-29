@@ -520,7 +520,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	user := domain.User{ID: identity.NewID("user"), Username: username, Role: domain.RoleUser, PasswordHash: hash, Email: email, CreatedAt: now, LastActiveAt: now}
+	user := domain.User{ID: identity.NewID("user"), Username: username, Role: domain.RoleUser, PasswordHash: hash, Email: email, AutoPurgeDays: domain.DefaultAutoPurgeDays, CreatedAt: now, LastActiveAt: now}
 	if err := s.store.CreateUser(r.Context(), user); err != nil {
 		writeError(w, http.StatusConflict, "username or email already taken")
 		return

@@ -35,13 +35,17 @@ type User struct {
 	// this user; 0 means the server default applies. User-editable from the
 	// account settings page.
 	MaxOutputTokens int `json:"max_output_tokens"`
-	// AutoPurgeDays opts the user into background cleanup of archived
-	// projects that saw no retrieval for this many days; 0 = off.
-	// User-editable from the account settings page.
+	// AutoPurgeDays enables background cleanup of archived projects that saw
+	// no retrieval for this many days; 0 = off. New accounts start at
+	// DefaultAutoPurgeDays; user-editable from the account settings page.
 	AutoPurgeDays int       `json:"auto_purge_days"`
 	CreatedAt     time.Time `json:"created_at"`
 	LastActiveAt    time.Time `json:"last_active_at"`
 }
+
+// DefaultAutoPurgeDays is the idle-project cleanup window every new account
+// starts with.
+const DefaultAutoPurgeDays = 60
 
 type Session struct {
 	TokenHash string

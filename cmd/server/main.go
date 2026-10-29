@@ -87,7 +87,7 @@ func ensureUser(ctx context.Context, st store.Store, username, password string, 
 		panic(err)
 	}
 	now := time.Now()
-	user := domain.User{ID: identity.NewID("user"), Username: username, Role: role, PasswordHash: hash, CreatedAt: now, LastActiveAt: now}
+	user := domain.User{ID: identity.NewID("user"), Username: username, Role: role, PasswordHash: hash, AutoPurgeDays: domain.DefaultAutoPurgeDays, CreatedAt: now, LastActiveAt: now}
 	if err := st.CreateUser(ctx, user); err != nil {
 		panic(err)
 	}
