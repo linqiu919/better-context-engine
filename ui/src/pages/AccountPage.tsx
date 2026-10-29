@@ -59,7 +59,7 @@ export function AccountPage({user}:{user:User}){
             <QuotaBar label={t('Uploads today')} used={quota.usage.upload} limit={quota.limits.daily_upload} tone="ok"/>
             <QuotaBar label={t('Storage')} used={quota.usage.storage_bytes} limit={quota.limits.storage_limit_mb*1048576} tone="neutral" format={bytes}/>
           </div>
-          <p className="quota-note">{t('Daily counters reset at midnight. Storage is a standing limit.')}</p>
+          <p className="quota-note">{t('Daily counters reset at midnight Beijing time. Storage is a standing limit.')}</p>
         </>}
         <AutoPurgeSection user={user}/>
       </Panel>

@@ -286,7 +286,7 @@ func (s *Server) enforceQuota(w http.ResponseWriter, r *http.Request, kind strin
 	}
 	used, usedErr := s.store.QuotaUsageToday(r.Context(), user.ID)
 	if usedErr == nil && used[kind] >= int64(daily) {
-		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("daily %s quota exhausted (%d per day); it resets at midnight, or an administrator can reset it", kind, daily))
+		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("daily %s quota exhausted (%d per day); it resets at midnight Beijing time, or an administrator can reset it", kind, daily))
 		return false
 	}
 	if kind == "upload" {
@@ -298,7 +298,7 @@ func (s *Server) enforceQuota(w http.ResponseWriter, r *http.Request, kind strin
 		// project deletion clears the counter.
 		if usedErr == nil && used["upload_bytes"]+incomingBytes > limit {
 			s.setQuotaBlock(r.Context(), user.ID)
-			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("daily upload volume exceeds the storage limit (%d MB); it resets at midnight, or remove projects to free the allowance", q.StorageLimitMB))
+			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("daily upload volume exceeds the storage limit (%d MB); it resets at midnight Beijing time, or remove projects to free the allowance", q.StorageLimitMB))
 			return false
 		}
 		if s.userStorageBytes(r.Context(), user.ID)+incomingBytes > limit {
@@ -655,7 +655,7 @@ func (s *Server) batchUpload(w http.ResponseWriter, r *http.Request) {
 	// a refused upload every few seconds for hours; without this, each retry
 	// paid JSON-decoding megabytes just to be told no again.
 	if user := currentUser(r); user.ID != "" && user.Role != domain.RoleAdmin && s.quotaBlocked(r.Context(), user.ID) {
-		writeError(w, http.StatusRequestEntityTooLarge, "storage or daily upload limit exceeded; remove projects to free space, or wait for the daily reset at midnight")
+		writeError(w, http.StatusRequestEntityTooLarge, "storage or daily upload limit exceeded; remove projects to free space, or wait for the daily reset at midnight Beijing time")
 		return
 	}
 	var req struct {

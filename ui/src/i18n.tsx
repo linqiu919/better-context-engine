@@ -59,7 +59,7 @@ const zh:Record<string,string> = {
   'Saved':'已保存',
   'Local accounts, repository ownership and retrieval usage.':'管理本地账号、仓库归属和检索使用情况。','Role':'角色','Last active':'最后活跃','Enable':'启用','Disable':'禁用',
   'Quota & rate limits':'配额与限流','Usage & limits':'用量与限额','Retrieval today':'今日检索','Enhance today':'今日增强','Uploads today':'今日上传',
-  'Administrator accounts are not subject to quotas.':'管理员账户不受配额限制。','Daily counters reset at midnight. Storage is a standing limit.':'次数配额每日零点重置；存储为持续上限。',
+  'Administrator accounts are not subject to quotas.':'管理员账户不受配额限制。','Daily counters reset at midnight Beijing time. Storage is a standing limit.':'次数配额每日北京时间零点重置；存储为持续上限。',
   'Default quotas for regular users and per-minute rate limits for BCE endpoints.':'配置普通用户的默认配额与 BCE 端点的每分钟请求上限。',
   'Default quotas':'默认限额','Applied to every non-admin user immediately.':'保存后对所有非管理员用户即时生效。',
   'Storage limit (MB)':'存储上限 (MB)','Daily retrieval':'每日检索次数','Daily enhance':'每日增强次数','Daily upload':'每日上传次数',

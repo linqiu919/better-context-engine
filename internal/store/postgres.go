@@ -1592,14 +1592,14 @@ func (p *Postgres) refreshSnapshotStats(ctx context.Context, snapshotID, modelID
 	return tx.Commit()
 }
 func (p *Postgres) RecordACEUsage(ctx context.Context, userID, endpoint string, units int64) error {
-	_, err := p.db.ExecContext(ctx, `INSERT INTO ace_usage(user_id,day,endpoint,calls,units) VALUES($1,CURRENT_DATE,$2,1,$3) ON CONFLICT(user_id,day,endpoint) DO UPDATE SET calls=ace_usage.calls+1, units=ace_usage.units+EXCLUDED.units`, userID, endpoint, units)
+	_, err := p.db.ExecContext(ctx, `INSERT INTO ace_usage(user_id,day,endpoint,calls,units) VALUES($1,`+sqlToday+`,$2,1,$3) ON CONFLICT(user_id,day,endpoint) DO UPDATE SET calls=ace_usage.calls+1, units=ace_usage.units+EXCLUDED.units`, userID, endpoint, units)
 	return err
 }
 func (p *Postgres) ListACEUsage(ctx context.Context, days int) ([]domain.ACEUsage, error) {
 	if days <= 0 {
 		days = 30
 	}
-	rows, err := p.db.QueryContext(ctx, `SELECT user_id,endpoint,SUM(calls),SUM(units),MAX(day) FROM ace_usage WHERE day > CURRENT_DATE - $1::int GROUP BY user_id,endpoint ORDER BY SUM(calls) DESC`, days)
+	rows, err := p.db.QueryContext(ctx, `SELECT user_id,endpoint,SUM(calls),SUM(units),MAX(day) FROM ace_usage WHERE day > `+sqlToday+` - $1::int GROUP BY user_id,endpoint ORDER BY SUM(calls) DESC`, days)
 	if err != nil {
 		return nil, err
 	}
@@ -1618,7 +1618,7 @@ func (p *Postgres) ACEUsageDaily(ctx context.Context, userID string, days int) (
 	if days <= 0 {
 		days = 30
 	}
-	rows, err := p.db.QueryContext(ctx, `SELECT day,endpoint,SUM(calls),SUM(units) FROM ace_usage WHERE day > CURRENT_DATE - $1::int AND ($2::text = '' OR user_id = $2) GROUP BY day,endpoint ORDER BY day,endpoint`, days, userID)
+	rows, err := p.db.QueryContext(ctx, `SELECT day,endpoint,SUM(calls),SUM(units) FROM ace_usage WHERE day > `+sqlToday+` - $1::int AND ($2::text = '' OR user_id = $2) GROUP BY day,endpoint ORDER BY day,endpoint`, days, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -1637,15 +1637,15 @@ func (p *Postgres) IncQuotaUsage(ctx context.Context, userID, kind string) error
 	return p.AddQuotaUsage(ctx, userID, kind, 1)
 }
 func (p *Postgres) AddQuotaUsage(ctx context.Context, userID, kind string, n int64) error {
-	_, err := p.db.ExecContext(ctx, `INSERT INTO user_quota_usage(user_id,day,kind,used) VALUES($1,CURRENT_DATE,$2,GREATEST($3,0)) ON CONFLICT(user_id,day,kind) DO UPDATE SET used=GREATEST(user_quota_usage.used+$3,0)`, userID, kind, n)
+	_, err := p.db.ExecContext(ctx, `INSERT INTO user_quota_usage(user_id,day,kind,used) VALUES($1,`+sqlToday+`,$2,GREATEST($3,0)) ON CONFLICT(user_id,day,kind) DO UPDATE SET used=GREATEST(user_quota_usage.used+$3,0)`, userID, kind, n)
 	return err
 }
 func (p *Postgres) ClearQuotaUsageKind(ctx context.Context, userID, kind string) error {
-	_, err := p.db.ExecContext(ctx, `DELETE FROM user_quota_usage WHERE user_id=$1 AND day=CURRENT_DATE AND kind=$2`, userID, kind)
+	_, err := p.db.ExecContext(ctx, `DELETE FROM user_quota_usage WHERE user_id=$1 AND day=`+sqlToday+` AND kind=$2`, userID, kind)
 	return err
 }
 func (p *Postgres) QuotaUsageToday(ctx context.Context, userID string) (map[string]int64, error) {
-	rows, err := p.db.QueryContext(ctx, `SELECT kind,used FROM user_quota_usage WHERE user_id=$1 AND day=CURRENT_DATE`, userID)
+	rows, err := p.db.QueryContext(ctx, `SELECT kind,used FROM user_quota_usage WHERE user_id=$1 AND day=`+sqlToday, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -1662,7 +1662,7 @@ func (p *Postgres) QuotaUsageToday(ctx context.Context, userID string) (map[stri
 	return out, rows.Err()
 }
 func (p *Postgres) QuotaUsageTodayAll(ctx context.Context) (map[string]map[string]int64, error) {
-	rows, err := p.db.QueryContext(ctx, `SELECT user_id,kind,used FROM user_quota_usage WHERE day=CURRENT_DATE`)
+	rows, err := p.db.QueryContext(ctx, `SELECT user_id,kind,used FROM user_quota_usage WHERE day=`+sqlToday)
 	if err != nil {
 		return nil, err
 	}
@@ -1682,7 +1682,7 @@ func (p *Postgres) QuotaUsageTodayAll(ctx context.Context) (map[string]map[strin
 	return out, rows.Err()
 }
 func (p *Postgres) ResetQuotaUsage(ctx context.Context, userID string) error {
-	_, err := p.db.ExecContext(ctx, `DELETE FROM user_quota_usage WHERE user_id=$1 AND day=CURRENT_DATE`, userID)
+	_, err := p.db.ExecContext(ctx, `DELETE FROM user_quota_usage WHERE user_id=$1 AND day=`+sqlToday, userID)
 	return err
 }
 // formatVector renders a float32 slice in pgvector's text input form
@@ -1795,6 +1795,10 @@ func itoa(v int) string {
 	}
 	return "10"
 }
+// sqlToday is the calendar day daily quotas and usage roll over on:
+// Beijing midnight (QuotaZone), not the database server's UTC date.
+const sqlToday = `(now() AT TIME ZONE 'Asia/Shanghai')::date`
+
 func (p *Postgres) RecordMetric(ctx context.Context, m domain.MetricPoint) error {
 	_, err := p.db.ExecContext(ctx, `INSERT INTO metrics(scope,repository_id,user_id,name,value,recorded_at) VALUES($1,NULLIF($2,''),NULLIF($3,''),$4,$5,$6)`, m.Scope, m.RepositoryID, m.UserID, m.Name, m.Value, m.Timestamp)
 	return err

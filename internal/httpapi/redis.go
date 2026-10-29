@@ -230,7 +230,7 @@ func (s *Server) noteStoredBytesRedis(ctx context.Context, userID string, n int6
 
 // quotaBlockTTL bounds how long an over-limit user is refused from the cheap
 // block flag before the full quota math runs again — it self-heals after an
-// admin raises the limits or the daily counter resets at midnight.
+// admin raises the limits or the daily counter resets at Beijing midnight.
 const quotaBlockTTL = 10 * time.Minute
 
 func quotaBlockKey(userID string) string { return redisKeyPrefix + "quota:block:" + userID }

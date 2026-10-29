@@ -843,8 +843,19 @@ func (m *Memory) aceProjectStats(pr domain.ACEProject, userID, modelID string) d
 	pr.FileCount = len(files)
 	return pr
 }
+// QuotaZone is where the daily quota and usage day rolls over: Beijing time
+// (fixed UTC+8, no DST), matching sqlToday on the Postgres side.
+var QuotaZone = time.FixedZone("Asia/Shanghai", 8*60*60)
+
+// QuotaDay returns now's calendar day in QuotaZone as UTC midnight — the
+// same shape a Postgres date column scans into.
+func QuotaDay(now time.Time) time.Time {
+	y, mo, d := now.In(QuotaZone).Date()
+	return time.Date(y, mo, d, 0, 0, 0, 0, time.UTC)
+}
+
 func (m *Memory) RecordACEUsage(_ context.Context, userID, endpoint string, units int64) error {
-	day := time.Now().Truncate(24 * time.Hour)
+	day := QuotaDay(time.Now())
 	key := userID + "|" + day.Format("2006-01-02") + "|" + endpoint
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -922,7 +933,7 @@ func (m *Memory) ACEUsageDaily(_ context.Context, userID string, days int) ([]do
 	return result, nil
 }
 func quotaDayPrefix(userID string) string {
-	return userID + "|" + time.Now().Format("2006-01-02") + "|"
+	return userID + "|" + QuotaDay(time.Now()).Format("2006-01-02") + "|"
 }
 func (m *Memory) IncQuotaUsage(ctx context.Context, userID, kind string) error {
 	return m.AddQuotaUsage(ctx, userID, kind, 1)
@@ -952,7 +963,7 @@ func (m *Memory) QuotaUsageToday(_ context.Context, userID string) (map[string]i
 	return out, nil
 }
 func (m *Memory) QuotaUsageTodayAll(_ context.Context) (map[string]map[string]int64, error) {
-	day := time.Now().Format("2006-01-02")
+	day := QuotaDay(time.Now()).Format("2006-01-02")
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := map[string]map[string]int64{}
