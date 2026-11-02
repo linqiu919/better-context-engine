@@ -3,7 +3,7 @@
 .idea/
 .vscode/
 .claude/
-.ace-tool/
+.bce-tool/
 .cursor/
 
 # secrets & local state
@@ -30,4 +30,3 @@ ui/vite.config.d.ts
 
 # logs
 *.log
-.bce-tool/

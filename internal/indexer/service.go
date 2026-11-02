@@ -697,7 +697,7 @@ func (s *Service) SearchBlobNames(ctx context.Context, query string, names []str
 	}
 	if missing > 0 {
 		result.MissingBlobs = missing
-		result.FormattedRetrieval = fmt.Sprintf("Note: %d file(s) in your workspace snapshot were never uploaded to the server (an earlier upload was likely rejected by a storage or rate quota), so their content is invisible to this and future searches. Delete the local .ace-tool/index.bin cache to force a full re-upload once the quota allows.\n", missing) + result.FormattedRetrieval
+		result.FormattedRetrieval = fmt.Sprintf("Note: %d file(s) in your workspace snapshot were never uploaded to the server (an earlier upload was likely rejected by a storage or rate quota), so their content is invisible to this and future searches. Delete the local .bce-tool/index.bin cache to force a full re-upload once the quota allows.\n", missing) + result.FormattedRetrieval
 	}
 	// ACE searches are the only search traffic in MCP-only deployments;
 	// without this sample the overview latency profile sits at zero forever.

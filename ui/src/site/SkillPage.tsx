@@ -74,7 +74,7 @@ export function SkillPage({dark,toggleTheme}:{dark:boolean;toggleTheme:()=>void}
     ['No resident process','Nothing runs in the background — the agent shells out to bce-tool only when it decides to search.'],
     ['Portable','One SKILL.md works across Cursor, Claude Code, Codex, GitHub Copilot and every other agent that reads the open Agent Skills format.'],
     ['Usage guidance built in','The skill tells the agent when to search, how to phrase queries and how to read the result — richer than a tool description.'],
-    ['Shares the MCP cache','Skill and MCP use the same .ace-tool/index.bin, so mixing both in one project costs nothing extra.'],
+    ['Shares the MCP cache','Skill and MCP use the same .bce-tool/index.bin, so mixing both in one project costs nothing extra.'],
   ]
   return <div className="mcp-page" onScroll={e=>setScrolled(e.currentTarget.scrollTop>24)}>
     <PublicNav scrolled={scrolled} onBrand={goHome} brandLabel={t('Back to home')}>

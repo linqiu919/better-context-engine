@@ -148,7 +148,7 @@ const zh:Record<string,string> = {
   'No resident process':'无常驻进程','Nothing runs in the background — the agent shells out to bce-tool only when it decides to search.':'后台没有任何进程——只有智能体决定检索时才会调用一次 bce-tool。',
   'Portable':'跨工具通用','One SKILL.md works across Cursor, Claude Code, Codex, GitHub Copilot and every other agent that reads the open Agent Skills format.':'一份 SKILL.md 通用于 Cursor、Claude Code、Codex、GitHub Copilot 及所有支持开放 Agent Skills 格式的智能体。',
   'Usage guidance built in':'自带使用规范','The skill tells the agent when to search, how to phrase queries and how to read the result — richer than a tool description.':'Skill 会告诉智能体何时检索、如何措辞、如何解读结果——比工具描述表达力强得多。',
-  'Shares the MCP cache':'与 MCP 共享缓存','Skill and MCP use the same .ace-tool/index.bin, so mixing both in one project costs nothing extra.':'Skill 与 MCP 共用同一份 .ace-tool/index.bin，同一项目里两者混用没有额外开销。',
+  'Shares the MCP cache':'与 MCP 共享缓存','Skill and MCP use the same .bce-tool/index.bin, so mixing both in one project costs nothing extra.':'Skill 与 MCP 共用同一份 .bce-tool/index.bin，同一项目里两者混用没有额外开销。',
   'Prefer a persistent tool your agent can call natively?':'更想要智能体可原生调用的常驻工具？','Use the MCP server instead':'改用 MCP 服务',
   'Three steps, no daemon':'三步接入，无需守护进程',
   'Export two variables':'导出两个环境变量','Put BCE_BASE_URL and BCE_TOKEN in your shell profile; the skill reads them at run time.':'把 BCE_BASE_URL 与 BCE_TOKEN 写进 shell 配置文件，Skill 运行时直接读取。',

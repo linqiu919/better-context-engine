@@ -62,7 +62,7 @@ cd <project-root> && npx -y bce-tool --base-url "$BCE_BASE_URL" --token "$BCE_TO
   - "exploratory query" — broad mode; excerpts are trimmed skeletons, read
     the cited ranges for full detail.
   - "never uploaded to the server" — the local cache is out of sync: delete
-    `.ace-tool/index.bin` in the project root and run again.
+    `.bce-tool/index.bin` in the project root and run again.
 
 ### When to use
 
@@ -103,5 +103,5 @@ Use the printed text as the task statement before you start working.
 - Projects over 150 MB of indexable source are refused.
 - `.gitignore`, `.bceignore` and common build/vendor directories are excluded
   automatically.
-- The same `.ace-tool/index.bin` cache is shared with the bce-tool MCP server,
+- The same `.bce-tool/index.bin` cache is shared with the bce-tool MCP server,
   so mixing the Skill and MCP in one project is fine.
