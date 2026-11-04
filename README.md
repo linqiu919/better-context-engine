@@ -1,78 +1,141 @@
+<div align="center">
+
+<img src=".github/assets/bce-logo.png" alt="Better Context Engine" width="128" />
+
 # Better Context Engine
 
-English | [简体中文](README.zh-CN.md)
+**An ACE-compatible code context engine: real-time indexing and low-latency, high-relevance retrieval for AI coding assistants.**
 
-An ACE-compatible code context retrieval engine written in Go. It indexes codebases in real time and serves low-latency, high-relevance context to AI coding assistants. The only dependencies are PostgreSQL and one model endpoint — no vector database, no message queue.
+[![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)](go.mod) [![Docker](https://img.shields.io/badge/docker-bifang1199%2Fbetter--context--engine-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/bifang1199/better-context-engine) [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?logo=postgresql&logoColor=white)](#quick-start) [![License](https://img.shields.io/badge/license-PolyForm%20NC%201.0-2BB8B2)](#license)
 
-![Landing page](.github/assets/bce-landing.png)
+English · [简体中文](README.zh-CN.md)
+
+<sub>Friends · <a href="https://linux.do">🐧 LinuxDO</a></sub>
+
+[Features](#features) · [How it works](#how-it-works) · [Screenshots](#screenshots) · [Models](#model-configuration) · [Quick start](#quick-start) · [Clients](#connecting-a-client) · [Configuration](#configuration)
+
+</div>
+
+---
+
+Better Context Engine (BCE) is written in Go. It indexes codebases in real time and serves context to AI coding assistants within a 5-second latency budget. The only dependencies are PostgreSQL (with pgvector) and one model endpoint — no separate vector database, no message queue.
+
+> [!NOTE]
+> Uploaded source is encrypted at rest with AES-256-GCM. Blobs are content-addressed and deduplicated, so branches and worktrees of one repository only cost their diff.
+
+<div align="center">
+  <img src=".github/assets/bce-landing.png" alt="Landing page" width="100%" />
+</div>
 
 ## Features
 
 **Retrieval**
 
-- Three-way recall fused with RRF: BM25 lexical search (persistent inverted index with camelCase/snake_case splitting) + path/symbol structural scoring + semantic vectors
-- Cross-encoder reranking + context curation (per-file caps, adjacent-fragment merging, small-fragment expansion)
-- Binary-quantized in-memory ANN for large candidate sets; each model path degrades independently with cooldowns, so lexical/structural retrieval always stays available
+- **Three-way recall** – BM25 lexical search (persistent inverted index, camelCase/snake_case splitting) + path/symbol structural scoring + semantic vectors, fused with RRF.
+- **Rerank & curation** – cross-encoder reranking, then per-file caps, adjacent-fragment merging and small-fragment expansion.
+- **Always available** – semantic scoring runs inside PostgreSQL via pgvector; each model path degrades independently with cooldowns, so lexical/structural retrieval never goes down.
 
 **Indexing**
 
-- tree-sitter AST structural chunking (8 language grammars, method-level chunks; regex and sliding-window fallbacks)
-- Content-addressed blobs (`sha256(path+content)`) + immutable snapshots + deterministic checkpoint IDs, deduplicated across users
-- Vectors stored per model ID; switching models automatically backfills missing embeddings
+- **AST chunking** – tree-sitter structural chunks (8 language grammars, method level), with regex and sliding-window fallbacks.
+- **Content addressing** – `sha256(path+content)` blobs + immutable snapshots + deterministic checkpoint IDs, deduplicated across users.
+- **Model isolation** – vectors are stored per model ID; switching models backfills missing embeddings automatically.
 
 **Integration & security**
 
-- ACE endpoints: `/batch-upload`, `/agents/codebase-retrieval` (returns `410` for unknown checkpoints), `/prompt-enhancer` — compatible with ace-tool-rs-style clients
-- Global token + personal tokens (stored as SHA-256), per-user daily usage accounting
-- Argon2id passwords, CSRF protection, RBAC, audit log; source blobs encrypted at rest with AES-256-GCM
+- **ACE endpoints** – `/batch-upload`, `/agents/codebase-retrieval` (`410` for unknown checkpoints), `/prompt-enhancer`; compatible with ace-tool-rs-style clients.
+- **Tokens & quotas** – global token + personal tokens (stored as SHA-256), per-user RPM, daily allowance and storage ceiling.
+- **Hardening** – Argon2id passwords, CSRF protection, RBAC, audit log.
 
 **Console**
 
-- Workspace: overview / my projects / retrieval debugger (fragment attribution breakdown, eval cases) / account settings
-- Admin: user management (incl. MCP usage) / all projects / system settings (models & registration) / announcements / audit log
-- English & Chinese UI, light & dark themes; frontend embedded via `go:embed` for single-binary deployment
+- **Workspace** – overview / my projects / retrieval debugger (fragment attribution, eval cases) / MCP usage / account settings.
+- **Admin** – users / all projects / system settings (models & registration) / quotas / announcements / audit log.
+- **Single binary** – English & Chinese, light & dark themes; the frontend is embedded via `go:embed`.
+
+## Overview
+
+| Item | Value |
+| :--- | :--- |
+| Server | Go 1.26 (CGO, tree-sitter) + React 17 console |
+| Storage | PostgreSQL 16 + pgvector; optional Redis for rate limits and caches |
+| Image | [`bifang1199/better-context-engine`](https://hub.docker.com/r/bifang1199/better-context-engine) (amd64 / arm64) |
+| Clients | [bce-tool](https://github.com/linqiu919/bce-tool-rs) MCP / CLI, any ace-tool-rs-style client |
+| Integrations | [dsh-bce](https://github.com/linqiu919/dsh-bce) — one-click prompt enhancement for DeepSeek Harness |
+| Default port | `18181` |
+
+## How it works
+
+```mermaid
+sequenceDiagram
+  participant C as bce-tool (MCP / CLI)
+  participant S as BCE server
+  participant DB as PostgreSQL + pgvector
+  participant M as Model endpoint
+  C->>S: /blobs/missing (probe content hashes)
+  C->>S: /batch-upload (only the diff)
+  S->>DB: encrypt + AST chunk + postings
+  S-->>M: embeddings (background)
+  C->>S: /agents/codebase-retrieval (checkpoint, query)
+  S->>DB: BM25 + structure + vector scores
+  S->>M: rerank
+  S-->>C: curated context
+```
+
+1. The client hashes the workspace and uploads only the blobs the server does not already hold.
+2. Lexical postings are written on ingest, so a project is searchable immediately; vectors are filled in the background.
+3. A retrieval fuses lexical, structural and semantic recall, reranks the candidates and curates the excerpts.
+4. A weak first-pass match switches to broad mode: LLM sub-query decomposition, manifest priors and skeleton excerpts.
+
+> [!IMPORTANT]
+> Every retrieval runs inside a 5-second budget. Steps that would overrun it (query expansion, reranking, inline embedding) degrade instead of failing the request.
 
 ## Screenshots
 
 | Index overview | My projects |
-| --- | --- |
+| :---: | :---: |
 | ![Index overview](.github/assets/bce-overview.png) | ![My projects](.github/assets/bce-projects.png) |
 
 | Search inspect | MCP usage |
-| --- | --- |
+| :---: | :---: |
 | ![Search inspect](.github/assets/bce-search.png) | ![MCP usage](.github/assets/bce-mcp-usage.png) |
 
-![Account settings](.github/assets/bce-account.png)
+<div align="center">
+  <img src=".github/assets/bce-account.png" alt="Account settings" width="100%" />
+</div>
 
 ## Model configuration
 
 ### Out-of-the-box defaults
 
 | Path | Default model | Notes |
-| --- | --- | --- |
+| :--- | :--- | :--- |
 | Embedding | `Qwen/Qwen3-Embedding-8B` | 4096 dimensions |
 | Reranker | `Qwen/Qwen3-Reranker-8B` | Jina/Cohere-compatible `/rerank` |
 | Prompt enhancer | `Qwen/Qwen3.5-9B` | OpenAI chat protocol |
 
-The default endpoint is SiliconFlow (`api.siliconflow.cn/v1`); a single `MODEL_API_KEY` covers all three paths for a zero-friction start. Everything can be switched to local services (ollama/vLLM) via environment variables or the admin console. Without any model configured, retrieval runs on the lexical/structural paths only.
+The default endpoint is SiliconFlow (`api.siliconflow.cn/v1`); a single `MODEL_API_KEY` covers all three paths. Everything can be switched to local services (ollama/vLLM) via environment variables or the admin console. Without any model configured, retrieval runs on the lexical/structural paths only.
 
 ### Recommended setup (what the hosted instance runs)
 
 | Path | Model | Provider |
-| --- | --- | --- |
+| :--- | :--- | :--- |
 | Embedding | `voyage-code-4` (1024 dims) | Voyage AI |
 | Reranker | `rerank-2.5` (Top-K 50) | Voyage AI |
 | Prompt enhancer | `google/gemini-3.8-flash` | OpenRouter |
 | Chunk summaries | `google/gemini-3.8-flash` | OpenRouter |
 
-Voyage's code-specialized embedding and rerank models perform noticeably better for code retrieval (embedding and reranker share the `https://api.voyageai.com/v1` endpoint and key; the query/document asymmetry is handled automatically via `input_type`). The enhancer/summary path uses its own provider, configured separately in the admin console under System settings → Retrieval configuration.
+Voyage's code-specialized models perform noticeably better for code retrieval. Embedding and reranker share the `https://api.voyageai.com/v1` endpoint and key, and the query/document asymmetry is handled automatically via `input_type`. The enhancer/summary path uses its own provider, configured under **System settings → Retrieval configuration**.
 
-#### Choosing the enhancer model
+<details>
+<summary><b>Choosing the enhancer model</b></summary>
 
-- **One model, several jobs**: besides `/prompt-enhancer` rewrites it also drives term expansion for spaceless-script (e.g. Chinese) queries and broad-query decomposition during search. The summary model shares its endpoint and key, so both must live on the same platform.
-- **Accuracy over speed**: an enhancement is only useful if it names the actual cause (a specific constant, page size, call site) rather than listing generic things to check. In our tests several faster, cheaper models produced rewrites that looked specific but missed the root cause, sometimes even adding constraints that ruled out the right fix. `gemini-3.8-flash` is slower (about 5–10s per enhancement) but in our comparisons it was better at pointing to the root cause, so it is the current recommendation.
-- **Evaluate with real questions whose answer you know**: several questions, several runs each, checking whether the rewrite hits the root cause — not just whether it cites code. One or two samples hide both latency variance and occasional drift.
-- **Mandatory-reasoning models work too**: calls through OpenRouter turn reasoning off; when a model refuses that (e.g. Gemini 3.x), the server retries once with minimal reasoning automatically.
+- **One model, several jobs** – besides `/prompt-enhancer` rewrites it drives term expansion for spaceless-script (e.g. Chinese) queries and broad-query decomposition. The summary model shares its endpoint and key, so both must live on the same platform.
+- **Accuracy over speed** – an enhancement is only useful if it names the actual cause (a specific constant, page size, call site) rather than listing generic things to check. Several faster, cheaper models produced rewrites that looked specific but missed the root cause. `gemini-3.8-flash` is slower (about 5–10s) but was better at pointing to the root cause in our comparisons.
+- **Evaluate with questions whose answer you know** – several questions, several runs each, checking whether the rewrite hits the root cause, not just whether it cites code.
+- **Mandatory-reasoning models work too** – calls through OpenRouter turn reasoning off; when a model refuses that (e.g. Gemini 3.x), the server retries once with minimal reasoning.
+
+</details>
 
 ## Quick start
 
@@ -85,7 +148,8 @@ docker compose up -d
 
 Open [http://localhost:18181](http://localhost:18181) and sign in as `admin` (password is `BOOTSTRAP_ADMIN_PASSWORD` from your `.env`).
 
-For a local ollama alongside: `docker compose --profile models up -d`.
+> [!TIP]
+> For a local ollama alongside: `docker compose --profile models up -d`.
 
 ### Local development
 
@@ -98,18 +162,21 @@ DEMO_DATA=true \
 go run ./cmd/server
 ```
 
-Open [http://localhost:18181](http://localhost:18181) and sign in as `admin`. Without `BCE_DATABASE_URL` the server uses an in-memory store.
+Without `BCE_DATABASE_URL` the server uses an in-memory store.
 
 ## Connecting a client
 
-Configure `ace-tool-rs` / `bce-tool` in your MCP client (Cursor, Claude Code, ...) with the base URL pointing at your BCE deployment and the token set to `ACE_TOKEN`. The first retrieval uploads and indexes the project automatically — no manual import needed.
+Configure `bce-tool` (or any `ace-tool-rs`-style client) in your MCP client — Cursor, Claude Code, … — with the base URL pointing at your BCE deployment. The first retrieval uploads and indexes the project automatically.
 
-Both the global token and personal tokens (`bce_...`, generated on the account settings page) work; personal tokens attribute usage and enhancement context to the calling user.
+| Token | Format | Attribution |
+| :--- | :--- | :--- |
+| Global | `ACE_TOKEN` | Shared; exempt from per-user quotas |
+| Personal | `bce_...` (account settings page) | Usage, quotas and enhancement context follow the calling user |
 
 ## Configuration
 
 | Variable | Default | Description |
-| --- | --- | --- |
+| :--- | :--- | :--- |
 | `BCE_ADDR` | `:18181` | HTTP listen address |
 | `BCE_DATABASE_URL` | empty | PostgreSQL connection URL; empty = in-memory store |
 | `ACE_TOKEN` | `development-token` | Global bearer token for the ACE endpoints |
@@ -142,8 +209,5 @@ The production container builds the frontend first and embeds it into the server
 
 [PolyForm Noncommercial 1.0.0](LICENSE) — free for personal and noncommercial use (research, study, hobby projects, nonprofits, education).
 
-**Commercial use requires a separate license.** Please open an issue or contact [@linqiu919](https://github.com/linqiu919) for commercial licensing.
-
-## 🔗 Friend Links
-
-- 🐧 [**LinuxDO**](https://linux.do) — A community for tech enthusiasts
+> [!WARNING]
+> **Commercial use requires a separate license.** Please open an issue or contact [@linqiu919](https://github.com/linqiu919).
