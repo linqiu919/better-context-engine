@@ -10,6 +10,7 @@ import { Pagination } from '../components/Pagination'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { usePaged } from '../hooks/usePaged'
 import { useLeaving } from '../hooks/useLeaving'
+import { useFitRows } from '../hooks/useFitRows'
 import { bytes, compact, formatDate, projectLabel } from '../lib/format'
 
 // Lazy: force-graph (canvas + d3 modules) only downloads when a graph opens.
@@ -29,14 +30,16 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
     if(!q)return projects||[]
     return (projects||[]).filter(p=>p.name.toLowerCase().includes(q)||(p.branch||'').toLowerCase().includes(q))
   },[projects,query])
-  const {page,setPage,paged,total,size}=usePaged(filtered,5)
+  const rows=useLeaving<HTMLTableSectionElement>()
+  // Page size follows the viewport height so the table fills the pane without a scrollbar.
+  const fit=useFitRows(rows.ref,filtered.length)
+  const {page,setPage,paged,total,size}=usePaged(filtered,fit)
   const load=()=>api<{projects:AceProject[]}>(admin?'/api/v1/admin/ace-projects':'/api/v1/me/ace-projects').then(v=>setProjects(v.projects)).catch(()=>setProjects([]))
   useEffect(()=>{void load()},[admin,refresh])
   const [graphProject,setGraphProject]=useState<AceProject|null>(null)
   const [pendingDelete,setPendingDelete]=useState<AceProject|null>(null)
   const [deleting,setDeleting]=useState(false)
   const [deleteError,setDeleteError]=useState('')
-  const rows=useLeaving<HTMLTableSectionElement>()
   const rowKey=(p:AceProject)=>(p.owner_id||'')+p.name+'\n'+(p.branch||'')
   const closeDelete=()=>{if(deleting)return;setPendingDelete(null);setDeleteError('')}
   const confirmDelete=async()=>{
