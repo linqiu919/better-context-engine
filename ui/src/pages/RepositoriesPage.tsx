@@ -8,7 +8,7 @@ import { PageHeader } from '../components/PageHeader'
 import { Empty } from '../components/Empty'
 import { Pagination } from '../components/Pagination'
 import { ConfirmModal } from '../components/ConfirmModal'
-import { PAGE_SIZE, usePaged } from '../hooks/usePaged'
+import { usePaged } from '../hooks/usePaged'
 import { useLeaving } from '../hooks/useLeaving'
 import { bytes, compact, formatDate, projectLabel } from '../lib/format'
 
@@ -29,7 +29,7 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
     if(!q)return projects||[]
     return (projects||[]).filter(p=>p.name.toLowerCase().includes(q)||(p.branch||'').toLowerCase().includes(q))
   },[projects,query])
-  const {page,setPage,paged,total,size}=usePaged(filtered,admin?PAGE_SIZE:5)
+  const {page,setPage,paged,total,size}=usePaged(filtered,5)
   const load=()=>api<{projects:AceProject[]}>(admin?'/api/v1/admin/ace-projects':'/api/v1/me/ace-projects').then(v=>setProjects(v.projects)).catch(()=>setProjects([]))
   useEffect(()=>{void load()},[admin,refresh])
   const [graphProject,setGraphProject]=useState<AceProject|null>(null)

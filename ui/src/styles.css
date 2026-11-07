@@ -3037,6 +3037,7 @@ html[lang="en"] .slogan em { font-size: .8em; }
   padding: 20px 0 26px;
   border-top: 1px solid var(--line);
 }
+.landing-footer-end { display: flex; align-items: center; gap: 12px; }
 .landing-footer small {
   font: 10px/1.2 var(--font-mono);
   letter-spacing: .13em;

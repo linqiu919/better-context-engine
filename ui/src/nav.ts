@@ -9,6 +9,7 @@ export type NavEntry = { page:Page; label:string; icon:typeof Archive }
 // console top bars.
 export const DOCS_URL='https://bce-doc.wxnext.top'
 export const DEEPSEEK_URL='https://github.com/linqiu919/dsh-bce'
+export const GITHUB_URL='https://github.com/linqiu919/better-context-engine'
 
 export const userNav:NavEntry[] = [
   {page:'overview',label:'Overview',icon:BarChart2},

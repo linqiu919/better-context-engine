@@ -1,4 +1,6 @@
 import { BrandLogo } from '../BrandLogo'
+import { GITHUB_URL } from '../nav'
+import { GitHubMark } from '../components/ToolMarks'
 
 // PublicNav is the floating glass top bar shared by the landing, bce-tool and
 // sign-in/registration screens: brand button on the left (its action differs
@@ -10,10 +12,14 @@ export function PublicNav({scrolled,onBrand,brandLabel,children}:{scrolled:boole
   </header>
 }
 
-// SiteFooter closes the landing and bce-tool pages with the brand line.
-export function SiteFooter(){
+// SiteFooter closes the landing and bce-tool pages with the brand line; the
+// landing page also shows the GitHub repository link.
+export function SiteFooter({github=false}:{github?:boolean}){
   return <footer className="landing-footer">
     <div className="landing-brand"><BrandLogo size={18}/><strong>BCE</strong></div>
-    <small>BETTER CONTEXT ENGINE</small>
+    <div className="landing-footer-end">
+      <small>BETTER CONTEXT ENGINE</small>
+      {github&&<a className="icon-button" href={GITHUB_URL} target="_blank" rel="noopener noreferrer" aria-label="GitHub" title="GitHub"><GitHubMark/></a>}
+    </div>
   </footer>
 }

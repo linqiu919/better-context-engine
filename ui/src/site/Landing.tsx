@@ -275,7 +275,7 @@ export function Landing({onSignIn,dark,toggleTheme}:{onSignIn:()=>void;dark:bool
           <button type="button" className="end-cell" onClick={()=>scrollToScreen('cost-screen')}><span className="funnel-index">04</span><strong>{t('Cost structure')}</strong><small>{t('Pay per token, not per seat')}</small><ArrowUpRight size={14}/></button>
           <button type="button" className="end-cell" onClick={()=>scrollToScreen('mcp-screen')}><span className="funnel-index">05</span><strong>{t('Getting started')}</strong><small>{t('Connect in three steps')}</small><ArrowUpRight size={14}/></button>
         </div>
-        <SiteFooter/>
+        <SiteFooter github/>
       </section>
     </main>
     <button type="button" className={`back-top ${showTop?'show':''}`} aria-label={t('Back to top')} onClick={scrollToTop}><ArrowUp size={16}/></button>
