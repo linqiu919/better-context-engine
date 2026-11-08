@@ -133,6 +133,11 @@ const (
 	enhanceContextBudget = 8000 // token budget for the retrieval context block
 	enhanceHistoryTurns  = 6
 	enhanceTTL           = 90 * time.Second
+	// enhanceMaxTokens caps the rewrite. Model time is ~2s plus ~11ms per
+	// output token in production (118 tokens took 3.2s, 1331 took 17s), so
+	// length is the latency; the prompt asks for ~400 and this is the
+	// backstop. finish_reason is logged to watch for truncation.
+	enhanceMaxTokens = 700
 )
 
 const enhanceSystemPrompt = `You are a prompt enhancement assistant for a software engineering AI agent. Rewrite the user's prompt into a clear, specific, immediately actionable request.
@@ -141,7 +146,7 @@ Rules:
 - Preserve the user's intent and language (answer in the same language as the original prompt).
 - Use the codebase context, when provided, to reference concrete files, symbols and behaviors instead of vague descriptions.
 - Add missing but inferable details: affected files, expected behavior, constraints.
-- Keep it concise; do not invent requirements that are not implied.
+- Keep it concise: usually a short paragraph or a handful of steps, staying within about 400 tokens; do not invent requirements that are not implied.
 - Respond with ONLY the enhanced prompt text, no preamble, no explanations.
 
 Output format — plain text, because it is pasted into input boxes that do not render Markdown:
@@ -236,6 +241,7 @@ func (s *Service) EnhancePrompt(ctx context.Context, userID string, ws Workspace
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 		Provider string `json:"provider"`
 		Usage    struct {
@@ -250,15 +256,19 @@ func (s *Service) EnhancePrompt(ctx context.Context, userID string, ws Workspace
 	defer cancel()
 	// Thinking off: prompt rewriting needs no chain-of-thought, and hybrid
 	// models otherwise bill/emit reasoning tokens before any content.
-	body := map[string]any{"model": cfg.Model, "messages": messages, "stream": false}
+	body := map[string]any{"model": cfg.Model, "messages": messages, "stream": false, "max_tokens": enhanceMaxTokens}
 	modelStart := time.Now()
 	err := cfg.postChat(cctx, url, body, &response)
+	finish := ""
+	if len(response.Choices) > 0 {
+		finish = response.Choices[0].FinishReason
+	}
 	// Stage split for latency triage: context search vs the model call, and
 	// how many of the completion tokens were reasoning.
 	slog.Info("prompt enhance", "context_ms", contextMS, "context_chars", len(contextBlock),
 		"model_ms", time.Since(modelStart).Milliseconds(), "model", cfg.Model, "provider", response.Provider,
 		"prompt_tokens", response.Usage.PromptTokens, "completion_tokens", response.Usage.CompletionTokens,
-		"reasoning_tokens", response.Usage.CompletionTokensDetails.ReasoningTokens, "failed", err != nil)
+		"reasoning_tokens", response.Usage.CompletionTokensDetails.ReasoningTokens, "finish_reason", finish, "failed", err != nil)
 	if err != nil {
 		return "", err
 	}

@@ -288,15 +288,23 @@ var mandatoryReasoning sync.Map
 func isOpenRouter(url string) bool { return strings.Contains(url, "openrouter") }
 
 // applyChatOptions is the single hook every enhancer-side chat call passes
-// its body through: thinking off, plus OpenRouter provider routing when the
-// admin pinned providers. Fallbacks stay allowed, so the listed providers are
-// a preference order and OpenRouter still serves the request when all of
-// them are down; the field is gated to OpenRouter like "reasoning" above.
+// its body through: thinking off, plus OpenRouter provider routing. Every
+// enhancer-side call is latency-bound and its time is dominated by output
+// tokens, so routing sorts by throughput instead of OpenRouter's default
+// price-weighted balance. Admin-pinned providers still come first (order
+// wins over sort; sort ranks the fallbacks), and fallbacks stay allowed so
+// OpenRouter still serves the request when all of them are down. The field
+// is gated to OpenRouter like "reasoning" above.
 func (c EnhanceConfig) applyChatOptions(body map[string]any, url string) {
 	disableThinking(body, url)
-	if len(c.Providers) > 0 && isOpenRouter(url) {
-		body["provider"] = map[string]any{"order": c.Providers, "allow_fallbacks": true}
+	if !isOpenRouter(url) {
+		return
 	}
+	provider := map[string]any{"sort": "throughput", "allow_fallbacks": true}
+	if len(c.Providers) > 0 {
+		provider["order"] = c.Providers
+	}
+	body["provider"] = provider
 }
 
 // postChat sends an enhancer-side chat completion: applyChatOptions, then

@@ -79,7 +79,6 @@ type SearchResponse struct {
 // lost its rerank round looks identical to a slow one.
 type SearchStages struct {
 	EmbedWaitMS    int  // blocked on the query vector
-	ExpandWaitMS   int  // blocked on term expansion before the first rerank
 	ExpandReady    bool // expansion was in hand for the first rerank
 	RerankBudgetMS int  // budget the first rerank round was given
 	RerankMS       int  // first rerank round, including a skip (≈0) or a truncation (≈budget)
@@ -790,11 +789,9 @@ const DefaultMaxOutputTokens = 6400
 const (
 	searchBudget    = 5 * time.Second
 	queryEmbedWait  = 2 * time.Second         // cap on waiting for the query vector
-	expandTermWait  = 1500 * time.Millisecond // cap on waiting for query term expansion
 	rerankMinBudget = 800 * time.Millisecond  // below this a rerank round is not worth firing
 	rerankRoom      = 1800 * time.Millisecond // time other stages leave for a rerank round
 	finishReserve   = 200 * time.Millisecond  // local post-processing tail
-	expandWaitSlack = 100 * time.Millisecond  // headroom kept above rerankMinBudget by the expansion wait
 )
 
 // search is the retrieval pipeline: chunk-level candidates → three ranking
@@ -875,28 +872,15 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 			fused[idx] += 1.0 / float64(rrfK+r+1)
 		}
 	}
-	// Expanded terms fold in before the first rerank. For a spaceless-script
-	// query the lexical/structural paths are dead without them (the tokenizer
-	// bigrams only cover same-script comment text), so the expansion earns a
-	// bounded wait like the query embed does, instead of a zero-blocking
-	// drain: the LLM started before candidate collection, so most of
-	// expandTermWait has usually already elapsed. Past the cap (or the
-	// remaining global budget) the pipeline continues; a late arrival still
-	// folds in at the broad-mode stage below.
+	// Expanded terms fold in before the first rerank when they are already in
+	// hand — a zero-blocking drain, not a bounded wait. Production showed the
+	// expansion LLM taking 1.9–5.5s (median ~3.4s) while the old 1.5s wait
+	// almost never saw it arrive: 20 of 23 waits ran out empty-handed, adding
+	// ~1.4s to every spaceless-script query for nothing. A heavy workspace
+	// starts the expansion before the prefilter, so it can still be ready
+	// here; a late arrival folds in at the broad-mode stage below.
 	var expansion queryExpansion
 	if expandCh != nil {
-		// The wait yields to the first rerank: it keeps rerankMinBudget for
-		// that round, plus rerankRoom when broad mode is anticipated (the
-		// first pass reserves that much below), so a slow expansion model
-		// can no longer push the rerank under its minimum and skip it.
-		// expandWaitSlack covers the local steps between this wait and the
-		// rerank budget check, which otherwise land it a hair under the floor.
-		reserve := finishReserve + rerankMinBudget + expandWaitSlack
-		if decomposeCh != nil || degraded || queryWantsStructure(query) {
-			reserve += rerankRoom
-		}
-		wait := min(expandTermWait, time.Until(deadline)-reserve)
-		waitStart = time.Now()
 		select {
 		case expansion = <-expandCh:
 			expandCh = nil // single write; a second receive would hang
@@ -904,9 +888,8 @@ func (s *Service) searchWith(ctx context.Context, query string, files []domain.R
 			if len(expansion.Terms) > 0 {
 				s.fuseExpandedTerms(ctx, candidates, expansion.Terms, fused)
 			}
-		case <-time.After(max(wait, 0)):
+		default:
 		}
-		stages.ExpandWaitMS = int(time.Since(waitStart).Milliseconds())
 	}
 	// Architecture/config-intent queries get the manifest prior in the first
 	// pass: waiting for broad mode would lose it whenever some code chunk
