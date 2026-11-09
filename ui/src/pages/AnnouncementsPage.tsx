@@ -15,11 +15,14 @@ import { usePaged } from '../hooks/usePaged'
 import { useLeaving } from '../hooks/useLeaving'
 import { formatDate } from '../lib/format'
 import { useGlide } from '../hooks/useGlide'
+import { useResource } from '../hooks/useResource'
+import { LoadError } from '../components/LoadError'
 
 // manages the history; users see the newest one as a popup after signing in.
 export function AnnouncementsPage(){
   const {t,language}=useI18n()
-  const [items,setItems]=useState<Announcement[]|null>(null)
+  const list=useResource(()=>api<{announcements:Announcement[]}>('/api/v1/admin/announcements').then(v=>v.announcements||[]),[])
+  const items=list.data,setItems=list.setData
   const [title,setTitle]=useState('')
   const [content,setContent]=useState('')
   const [tab,setTab]=useState<'write'|'preview'>('write')
@@ -33,9 +36,12 @@ export function AnnouncementsPage(){
   const [deleteError,setDeleteError]=useState('')
   const pager=usePaged(items||[])
   const rows=useLeaving<HTMLTableSectionElement>()
-  const load=()=>api<{announcements:Announcement[]}>('/api/v1/admin/announcements').then(v=>setItems(v.announcements||[])).catch(()=>setItems([]))
-  useEffect(()=>{void load()},[])
+  const load=list.reload
+  useEffect(()=>{if(!viewing)return;const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape')setViewing(null)};document.addEventListener('keydown',onKey);return()=>document.removeEventListener('keydown',onKey)},[viewing])
+  // Editing the draft makes the last publish outcome stale.
+  const edited=()=>{setPublished(false);setError('')}
   const publish=async()=>{
+    if(busy)return
     setBusy(true);setPublished(false);setError('')
     try{
       await api('/api/v1/admin/announcements',{method:'POST',...jsonBody({title:title.trim(),content})})
@@ -44,13 +50,13 @@ export function AnnouncementsPage(){
     finally{setBusy(false)}
   }
   const confirmDelete=async()=>{
-    if(!pendingDelete)return
+    if(!pendingDelete||deleting)return
     setDeleting(true);setDeleteError('')
     try{
       const gone=pendingDelete.id
       await api(`/api/v1/admin/announcements/${gone}`,{method:'DELETE'})
       setPendingDelete(null)
-      rows.leave(String(gone),()=>{setItems(v=>v&&v.filter(a=>a.id!==gone));void load()})
+      rows.leave(String(gone),()=>{setItems(v=>v&&v.filter(a=>a.id!==gone));load()})
     }catch(e){setDeleteError((e as Error).message)}
     finally{setDeleting(false)}
   }
@@ -59,11 +65,11 @@ export function AnnouncementsPage(){
     <Panel title={t('Publish announcement')} meta="ADMIN ONLY">
       <p className="settings-intro">{t('The popup shows once per user; dismissing it keeps it away until a newer announcement is published.')}</p>
       <div className="announce-form">
-        <Setting label={t('Title')}><input value={title} onChange={e=>setTitle(e.target.value)} maxLength={200}/></Setting>
+        <Setting label={t('Title')}><input value={title} onChange={e=>{setTitle(e.target.value);edited()}} maxLength={200}/></Setting>
         <div className="announce-editor">
           <div className="tab-switch glide" ref={tabGlide.ref}>{tabGlide.layer}<button className={tab==='write'?'active':''} onClick={()=>setTab('write')}>{t('Write')}</button><button className={tab==='preview'?'active':''} onClick={()=>setTab('preview')}>{t('Preview')}</button></div>
           {tab==='write'
-            ?<textarea value={content} onChange={e=>setContent(e.target.value)} rows={10} placeholder={t('Markdown supported: # headings, **bold**, `code`, lists, links, quotes.')}/>
+            ?<textarea value={content} onChange={e=>{setContent(e.target.value);edited()}} rows={10} placeholder={t('Markdown supported: # headings, **bold**, `code`, lists, links, quotes.')}/>
             :<div className="announce-preview">{content.trim()?<Markdown source={content}/>:<p className="settings-intro">{t('Nothing to preview yet.')}</p>}</div>}
         </div>
       </div>
@@ -71,7 +77,8 @@ export function AnnouncementsPage(){
       <div className="settings-actions">{published&&<span>{t('Announcement published')}</span>}<Button auto type="secondary" loading={busy} disabled={!title.trim()||!content.trim()} onClick={publish}>{t('Publish')}</Button></div>
     </Panel>
     <Panel title={t('Published announcements')}>
-      {!items?<Loading/>:items.length===0?<Empty title={t('No announcements yet.')} text={t('Published announcements will be listed here.')}/>:<>
+      {list.error&&<LoadError error={list.error} onRetry={list.reload}/>}
+      {!items?!list.error&&<Loading/>:items.length===0?<Empty title={t('No announcements yet.')} text={t('Published announcements will be listed here.')}/>:<>
         <div className="data-table-wrap" role="region" tabIndex={0}>
           <table className="data-table">
             <thead><tr><th>{t('Title')}</th><th>{t('Publisher')}</th><th>{t('Published at')}</th><th/></tr></thead>
@@ -79,7 +86,7 @@ export function AnnouncementsPage(){
               <td><strong>{a.title}</strong></td>
               <td>{a.author}</td>
               <td>{formatDate(a.created_at,language)}</td>
-              <td><div className="row-actions"><Button auto scale={.62} ghost onClick={()=>setViewing(a)}>{t('View')}</Button><Button auto scale={.62} type="error" ghost onClick={()=>{setPendingDelete(a);setDeleteError('')}}>{t('Delete')}</Button></div></td>
+              <td><div className="row-actions"><Button auto scale={.62} ghost onClick={()=>setViewing(a)}>{t('View')}</Button><Button auto scale={.62} type="error" ghost disabled={rows.leaving===String(a.id)} onClick={()=>{setPendingDelete(a);setDeleteError('')}}>{t('Delete')}</Button></div></td>
             </tr>)}</tbody>
           </table>
         </div>
@@ -96,6 +103,6 @@ export function AnnouncementsPage(){
       title={t('Delete announcement')} target={pendingDelete.title}
       text={t('Delete this announcement? Users who have not seen it yet will no longer get the popup.')}
       confirmLabel={t('Delete')} danger busy={deleting} error={deleteError}
-      onCancel={()=>setPendingDelete(null)} onConfirm={confirmDelete}/>}
+      onCancel={()=>{setPendingDelete(null);setDeleteError('')}} onConfirm={confirmDelete}/>}
   </>
 }

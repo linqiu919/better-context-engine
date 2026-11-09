@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import { Button, Loading } from '@geist-ui/core'
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api'
@@ -8,6 +7,8 @@ import { PageHeader } from '../components/PageHeader'
 import { Panel } from '../components/Panel'
 import { chartAxis, chartTooltip } from '../components/chartTheme'
 import { clock, ms } from '../lib/format'
+import { useResource } from '../hooks/useResource'
+import { LoadError } from '../components/LoadError'
 
 // Admin analytics: six hourly series over the last 24 hours. The endpoint is
 // memoized server-side for 60s, so refreshing is cheap; there is deliberately
@@ -15,14 +16,16 @@ import { clock, ms } from '../lib/format'
 type AnalyticsPoint = AnalyticsHour & { time:number; ingest_mb:number; degraded_pct:number; cache_pct:number }
 export function AnalyticsPage(){
   const {t}=useI18n()
-  const [data,setData]=useState<Analytics|null>(null)
-  const load=()=>api<Analytics>('/api/v1/admin/analytics').then(setData).catch(()=>setData(null))
-  useEffect(()=>{void load()},[])
-  if(!data)return <Loading/>
+  // Refresh keeps the current charts on screen until the new data lands; a
+  // failure shows a retry instead of an endless spinner.
+  const analytics=useResource(()=>api<Analytics>('/api/v1/admin/analytics'),[])
+  const data=analytics.data
+  if(!data)return analytics.error?<LoadError error={analytics.error} onRetry={analytics.reload}/>:<Loading/>
   const hours:AnalyticsPoint[]=data.hours.map(h=>({...h,time:new Date(h.hour).getTime(),ingest_mb:Math.round(h.ingest_bytes/1024/1024*10)/10,degraded_pct:Math.round(h.degraded_rate*1000)/10,cache_pct:Math.round(h.cache_rate*1000)/10}))
   const pct=(v:number)=>`${v}%`
   return <>
-    <PageHeader title={t('Analytics')} description={t('Hourly retrieval and ingestion telemetry across all users; the data refreshes at most once a minute.')} actions={<Button auto scale={.8} onClick={()=>{setData(null);void load()}}>{t('Refresh')}</Button>}/>
+    <PageHeader title={t('Analytics')} description={t('Hourly retrieval and ingestion telemetry across all users; the data refreshes at most once a minute.')} actions={<Button auto scale={.8} loading={analytics.loading} onClick={analytics.reload}>{t('Refresh')}</Button>}/>
+    {analytics.error&&<LoadError error={analytics.error} onRetry={analytics.reload}/>}
     <div className="analytics-grid">
       <Panel title={t('Latency (retrieval stage)')} meta={t('ALL USERS · LAST 24 HOURS')}>
         <HourChart data={hours} kind="area" dataKey="p95_ms" fmt={v=>ms(v)} label={t('Hourly P95')}/>

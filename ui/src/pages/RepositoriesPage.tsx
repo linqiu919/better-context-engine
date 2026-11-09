@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useMemo, useState } from 'react'
 import { Button, Loading } from '@geist-ui/core'
 import { Box, GitBranch, Info, Search, Share2, Trash2 } from '@geist-ui/icons'
 import { api } from '../api'
@@ -11,6 +11,9 @@ import { ConfirmModal } from '../components/ConfirmModal'
 import { usePaged } from '../hooks/usePaged'
 import { useLeaving } from '../hooks/useLeaving'
 import { useFitRows } from '../hooks/useFitRows'
+import { useResource } from '../hooks/useResource'
+import { LoadError } from '../components/LoadError'
+import { indexState } from '../lib/indexState'
 import { bytes, compact, formatDate, projectLabel } from '../lib/format'
 
 // Lazy: force-graph (canvas + d3 modules) only downloads when a graph opens.
@@ -18,10 +21,14 @@ const ProjectGraphModal = lazy(() => import('../components/ProjectGraphModal'))
 
 // RepositoriesPage lists ACE projects: the user's own (with index status and
 // delete) or, with `admin`, every project across users (with owner and
-// coverage columns).
+// coverage columns). PageContent keys the two variants apart, so switching
+// between them remounts instead of showing one list under the other's columns.
 export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:number}){
   const {t,language}=useI18n()
-  const [projects,setProjects]=useState<AceProject[]|null>(null)
+  // SSE refreshes reload in place; a failed reload keeps the current rows and
+  // shows the error, rather than wiping the table into "no projects yet".
+  const list=useResource(()=>api<{projects:AceProject[]}>(admin?'/api/v1/admin/ace-projects':'/api/v1/me/ace-projects').then(v=>v.projects),[admin,refresh])
+  const projects=list.data,setProjects=list.setData
   // Client-side fuzzy name filter: the project list is already fully loaded,
   // so a case-insensitive substring match over it is instant and needs no API.
   const [query,setQuery]=useState('')
@@ -34,8 +41,6 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
   // Page size follows the viewport height so the table fills the pane without a scrollbar.
   const fit=useFitRows(rows.ref,filtered.length)
   const {page,setPage,paged,total,size}=usePaged(filtered,fit)
-  const load=()=>api<{projects:AceProject[]}>(admin?'/api/v1/admin/ace-projects':'/api/v1/me/ace-projects').then(v=>setProjects(v.projects)).catch(()=>setProjects([]))
-  useEffect(()=>{void load()},[admin,refresh])
   const [graphProject,setGraphProject]=useState<AceProject|null>(null)
   const [pendingDelete,setPendingDelete]=useState<AceProject|null>(null)
   const [deleting,setDeleting]=useState(false)
@@ -43,12 +48,12 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
   const rowKey=(p:AceProject)=>(p.owner_id||'')+p.name+'\n'+(p.branch||'')
   const closeDelete=()=>{if(deleting)return;setPendingDelete(null);setDeleteError('')}
   const confirmDelete=async()=>{
-    if(!pendingDelete)return
+    if(!pendingDelete||deleting)return
     setDeleting(true);setDeleteError('')
     const gone=rowKey(pendingDelete)
     try{
       await api(projectPath(pendingDelete),{method:'DELETE'});setPendingDelete(null)
-      rows.leave(gone,()=>{setProjects(ps=>ps&&ps.filter(p=>rowKey(p)!==gone));void load()})
+      rows.leave(gone,()=>{setProjects(ps=>ps&&ps.filter(p=>rowKey(p)!==gone));list.reload()})
     }
     catch(e){setDeleteError((e as Error).message)}
     finally{setDeleting(false)}
@@ -56,12 +61,16 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
   // Rows are keyed by (name, branch); branch rides along as a query param.
   const projectPath=(p:AceProject)=>`/api/v1/me/ace-projects/${encodeURIComponent(p.name)}${p.branch?`?branch=${encodeURIComponent(p.branch)}`:''}`
   // Empty snapshot_id = placeholder row while the first upload is in flight.
-  const indexStatus=(p:AceProject)=>
-    !p.snapshot_id?<span className="status-pill warn"><i className="status-dot warn"/><em>{t('Uploading')}</em></span>
-    :!p.chunk_count?<>—</>
-    :p.embedded_count>=p.chunk_count?<span className="status-pill ok"><i className="status-dot ok"/><em>{t('Ready')}</em></span>
-    :<span className="status-pill warn"><i className="status-dot warn"/><em>{t('Indexing')} {Math.round(p.embedded_count/p.chunk_count*100)}%</em></span>
-  if(!projects)return <Loading/>
+  const indexStatus=(p:AceProject)=>{
+    const s=indexState(p)
+    switch(s.kind){
+      case'uploading':return <span className="status-pill warn"><i className="status-dot warn"/><em>{t('Uploading')}</em></span>
+      case'empty':return <>—</>
+      case'ready':return <span className="status-pill ok"><i className="status-dot ok"/><em>{t('Ready')}</em></span>
+      case'indexing':return <span className="status-pill warn"><i className="status-dot warn"/><em>{t('Indexing')} {s.pct}%</em></span>
+    }
+  }
+  if(!projects)return list.error?<LoadError error={list.error} onRetry={list.reload}/>:<Loading/>
   return <>
     <PageHeader title={t(admin?'All projects':'My projects')} description={t(admin?'Every BCE-indexed project across users.':'Projects indexed by your BCE / MCP client. Names are inferred from project manifests.')}/>
     <div className="page-toolbar">
@@ -71,6 +80,7 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
         <input value={query} onChange={e=>{setQuery(e.target.value);setPage(1)}} placeholder={t('Filter by project name')} aria-label={t('Filter by project name')}/>
       </label>
     </div>
+    {list.error&&<LoadError error={list.error} onRetry={list.reload}/>}
     <div className="data-table-wrap" role="region" tabIndex={0}>
       <table className="data-table">
         <thead><tr>
@@ -94,12 +104,12 @@ export function RepositoriesPage({admin=false,refresh}:{admin?:boolean;refresh:n
           <td>{compact(p.file_count)}</td>
           <td>{compact(p.chunk_count)}</td>
           {admin
-            ?<><td>{p.chunk_count?`${Math.round(p.embedded_count/p.chunk_count*100)}%`:'—'}</td><td>{bytes(p.storage_bytes)}</td></>
+            ?<><td>{p.chunk_count?`${Math.floor(p.embedded_count/p.chunk_count*100)}%`:'—'}</td><td>{bytes(p.storage_bytes)}</td></>
             :<><td>{indexStatus(p)}</td><td>{bytes(p.storage_bytes)}</td></>}
           <td>{formatDate(p.updated_at,language)}</td>
           {!admin&&<td><div className="row-actions">
             <Button auto scale={.62} ghost className="btn-graph" icon={<Share2/>} disabled={!p.snapshot_id} onClick={()=>setGraphProject(p)}>{t('Graph')}</Button>
-            <Button auto scale={.62} type="error" ghost icon={<Trash2/>} onClick={()=>setPendingDelete(p)}>{t('Delete')}</Button>
+            <Button auto scale={.62} type="error" ghost icon={<Trash2/>} disabled={rows.leaving===rowKey(p)} onClick={()=>setPendingDelete(p)}>{t('Delete')}</Button>
           </div></td>}
         </tr>)}</tbody>
       </table>

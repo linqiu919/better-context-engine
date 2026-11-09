@@ -1788,6 +1788,22 @@ func (p *Postgres) ListJobs(ctx context.Context, owner string, all bool, limit i
 	}
 	return out, rows.Err()
 }
+func (p *Postgres) JobsByStatus(ctx context.Context, status domain.JobStatus) ([]domain.IndexJob, error) {
+	rows, err := p.db.QueryContext(ctx, jobSelect+` WHERE status=$1`, string(status))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.IndexJob{}
+	for rows.Next() {
+		j, e := scanJob(rows)
+		if e != nil {
+			return nil, e
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
 func itoa(v int) string {
 	const digits = "0123456789"
 	if v < 10 {

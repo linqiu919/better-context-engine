@@ -489,6 +489,8 @@ body {
 @keyframes pulse {
   50% { box-shadow: 0 0 0 7px transparent; }
 }
+/* SSE not connected (connecting or reconnecting): grey, still dot. */
+.live-state.offline .pulse { background: var(--muted); box-shadow: none; animation: none; }
 
 .mobile-menu { display: none; }
 .mobile-backdrop { display: none; }
@@ -1713,6 +1715,7 @@ code::after {
   border: 1px solid var(--line);
 }
 .form-error { font-size: 11px; color: var(--bad); margin: 10px 0; }
+.load-error { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .empty {
   min-height: 250px;
   display: flex;

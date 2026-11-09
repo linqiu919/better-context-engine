@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Loading } from '@geist-ui/core'
 import { api } from '../api'
 import type { AceUsageDay } from '../types'
@@ -8,19 +8,25 @@ import { Panel } from '../components/Panel'
 import { MetricStrip } from '../components/MetricStrip'
 import { Empty } from '../components/Empty'
 import { compact } from '../lib/format'
+import { useResource } from '../hooks/useResource'
+import { LoadError } from '../components/LoadError'
 import { EndpointCards, RangeSwitch, USAGE_ENDPOINTS, UsageTrend, usageTotals, usageWindowMeta } from './usageShared'
 
 export function McpUsagePage(){
   const {t}=useI18n()
   const [days,setDays]=useState(7)
-  const [daily,setDaily]=useState<AceUsageDay[]|null>(null)
-  useEffect(()=>{api<{daily:AceUsageDay[]}>(`/api/v1/me/ace-usage?days=${days}`).then(v=>setDaily(v.daily||[])).catch(()=>setDaily([]))},[days])
-  if(!daily)return <Loading/>
+  // The loaded window travels with its rows: while a range switch is in
+  // flight the chart keeps the old rows on the old axis instead of drawing
+  // them on the new one, and a late response for an earlier pick is dropped.
+  const usage=useResource(()=>api<{daily:AceUsageDay[]}>(`/api/v1/me/ace-usage?days=${days}`).then(v=>({days,daily:v.daily||[]})),[days])
+  if(!usage.data)return usage.error?<LoadError error={usage.error} onRetry={usage.reload}/>:<Loading/>
+  const {daily,days:shown}=usage.data
   const totals=usageTotals(daily)
   const totalCalls=USAGE_ENDPOINTS.reduce((s,e)=>s+totals[e].calls,0)
   const activeDays=new Set(daily.filter(r=>r.calls>0).map(r=>r.day.slice(0,10))).size
   return <div className="usage-page">
     <PageHeader title={t('MCP usage')} description={t('Your MCP / BCE client traffic for this account.')} actions={<RangeSwitch days={days} onChange={setDays}/>}/>
+    {usage.error&&<LoadError error={usage.error} onRetry={usage.reload}/>}
     {totalCalls===0?<Empty title={t('No MCP traffic yet.')} text={t('Connect your MCP client and run a search to see usage here.')}/>:<>
       <MetricStrip values={[
         [t('Total calls'),compact(totalCalls)],
@@ -30,7 +36,7 @@ export function McpUsagePage(){
         [t('Active days'),activeDays],
       ]}/>
       <EndpointCards totals={totals}/>
-      <Panel title={t('Daily activity')} meta={t(usageWindowMeta(days))}><UsageTrend daily={daily} days={days}/></Panel>
+      <Panel title={t('Daily activity')} meta={t(usageWindowMeta(shown))}><UsageTrend daily={daily} days={shown}/></Panel>
     </>}
   </div>
 }

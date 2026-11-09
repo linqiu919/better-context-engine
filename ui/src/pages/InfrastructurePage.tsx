@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button, Loading } from '@geist-ui/core'
 import { CheckInCircle, Eye, EyeOff, X, XCircle } from '@geist-ui/icons'
 import { api, jsonBody } from '../api'
@@ -7,16 +7,18 @@ import { useI18n } from '../i18n'
 import { PageHeader } from '../components/PageHeader'
 import { Panel } from '../components/Panel'
 import { Setting } from '../components/Setting'
+import { LoadError } from '../components/LoadError'
+import { useResource } from '../hooks/useResource'
 
 export function InfrastructurePage(){
   const {t}=useI18n()
-  const [settings,setSettings]=useState<RetrievalSettings|null>(null)
+  const loaded=useResource(()=>api<RetrievalSettings>('/api/v1/admin/settings/retrieval'),[])
+  const settings=loaded.data,setSettings=loaded.setData
   const [busy,setBusy]=useState(false)
   const [saved,setSaved]=useState(false)
   const [error,setError]=useState('')
-  const load=()=>api<RetrievalSettings>('/api/v1/admin/settings/retrieval').then(setSettings)
-  useEffect(()=>{void load()},[])
-  const update=<K extends keyof RetrievalSettings>(key:K,value:RetrievalSettings[K])=>setSettings(current=>current?{...current,[key]:value}:current)
+  // An edit makes the last save outcome stale: drop the "saved" / error line.
+  const update=<K extends keyof RetrievalSettings>(key:K,value:RetrievalSettings[K])=>{setSettings(current=>current?{...current,[key]:value}:current);setSaved(false);setError('')}
   const save=async()=>{
     if(!settings)return
     setBusy(true);setSaved(false);setError('')
@@ -26,7 +28,7 @@ export function InfrastructurePage(){
     }catch(e){setError((e as Error).message)}
     finally{setBusy(false)}
   }
-  if(!settings)return <Loading/>
+  if(!settings)return loaded.error?<LoadError error={loaded.error} onRetry={loaded.reload}/>:<Loading/>
   return <>
     <PageHeader title={t('System settings')} description={t('Model endpoints for retrieval plus system-level switches.')}/>
     <RegistrationPanel/>
@@ -115,20 +117,24 @@ export function InfrastructurePage(){
 function RegistrationPanel(){
   const {t}=useI18n()
   const [settings,setSettings]=useState<SystemSettings|null>(null)
+  const [busy,setBusy]=useState(false)
   const [saved,setSaved]=useState(false)
   const [error,setError]=useState('')
   useEffect(()=>{api<SystemSettings>('/api/v1/admin/settings/system').then(setSettings).catch(e=>setError((e as Error).message))},[])
   const toggle=async(next:boolean)=>{
-    if(!settings)return
+    if(!settings||busy)return
     const previous=settings
-    setSettings({...settings,registration_enabled:next});setSaved(false);setError('')
+    // Optimistic, but one PATCH at a time (the switch is disabled while it
+    // runs) so a rollback can never undo a later toggle.
+    setSettings({...settings,registration_enabled:next});setSaved(false);setError('');setBusy(true)
     try{setSettings(await api<SystemSettings>('/api/v1/admin/settings/system',{method:'PATCH',...jsonBody({registration_enabled:next})}));setSaved(true)}
     catch(e){setError((e as Error).message);setSettings(previous)}
+    finally{setBusy(false)}
   }
   return <Panel title={t('Registration')} meta="ADMIN ONLY">
     <p className="settings-intro">{t('Gates email signup and first-time LinuxDo account creation; existing accounts keep signing in.')}</p>
     {settings?<div className="settings-grid">
-      <Setting label={t('Allow self-service signup')}><label className="toggle"><input type="checkbox" checked={settings.registration_enabled} onChange={e=>toggle(e.target.checked)}/><span/></label></Setting>
+      <Setting label={t('Allow self-service signup')}><label className="toggle"><input type="checkbox" checked={settings.registration_enabled} disabled={busy} onChange={e=>toggle(e.target.checked)}/><span/></label></Setting>
     </div>:!error&&<Loading/>}
     {settings&&settings.registration_enabled&&!settings.smtp_configured&&<p className="form-error">{t('SMTP is not configured — the email signup entry stays hidden until it is.')}</p>}
     {error&&<p className="form-error">{error}</p>}
@@ -185,18 +191,22 @@ function ProviderTagsField({value,onChange}:{value:string[];onChange:(v:string[]
 
 // ModelTest probes one card's current (possibly unsaved) form values against
 // the live provider. Results are dropped whenever the form changes so a stale
-// pass never vouches for edited values.
+// pass never vouches for edited values; the sequence number also drops a test
+// still in flight when the form changed, instead of letting it land late.
 function ModelTest({target,settings}:{target:'semantic'|'language';settings:RetrievalSettings}){
   const {t}=useI18n()
   const [busy,setBusy]=useState(false)
   const [result,setResult]=useState<ModelTestResult|null>(null)
   const [error,setError]=useState('')
-  useEffect(()=>{setResult(null);setError('')},[settings])
+  const seq=useRef(0)
+  useEffect(()=>{seq.current++;setResult(null);setError('');setBusy(false)},[settings])
+  useEffect(()=>()=>{seq.current++},[])
   const run=async()=>{
+    const id=++seq.current
     setBusy(true);setResult(null);setError('')
-    try{setResult(await api<ModelTestResult>('/api/v1/admin/settings/retrieval/test',{method:'POST',...jsonBody({target,settings})}))}
-    catch(e){setError((e as Error).message)}
-    finally{setBusy(false)}
+    try{const v=await api<ModelTestResult>('/api/v1/admin/settings/retrieval/test',{method:'POST',...jsonBody({target,settings})});if(id===seq.current)setResult(v)}
+    catch(e){if(id===seq.current)setError((e as Error).message)}
+    finally{if(id===seq.current)setBusy(false)}
   }
   const label:Record<string,string>={embedding:t('Embedding model'),reranker:t('Reranker model'),enhancer:t('Enhancer model'),summary:t('Summary model')}
   return <div className="mc-test">

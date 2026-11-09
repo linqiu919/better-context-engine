@@ -177,6 +177,9 @@ type Store interface {
 	UpdateJob(context.Context, domain.IndexJob) error
 	JobByID(context.Context, string) (domain.IndexJob, error)
 	ListJobs(context.Context, string, bool, int) ([]domain.IndexJob, error)
+	// JobsByStatus lists every job in one status regardless of owner; the
+	// startup reconciliation uses it to find jobs a dead process left running.
+	JobsByStatus(context.Context, domain.JobStatus) ([]domain.IndexJob, error)
 	RecordMetric(context.Context, domain.MetricPoint) error
 	Metrics(context.Context, string, string, time.Time, int) ([]domain.MetricPoint, error)
 	// UserMetrics returns one user's samples of a metric since the given

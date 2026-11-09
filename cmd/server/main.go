@@ -48,6 +48,7 @@ func main() {
 	if cfg.DemoData {
 		seedDemo(ctx, st, idx, admin)
 	}
+	idx.ReconcileInterruptedJobs(ctx)
 	idx.StartEmbeddingBackfill()
 	// Expired session rows are already invisible to reads; this loop keeps
 	// them from accumulating in the table forever.

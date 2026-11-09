@@ -1029,6 +1029,17 @@ func (m *Memory) ListJobs(_ context.Context, ownerID string, all bool, limit int
 	}
 	return out, nil
 }
+func (m *Memory) JobsByStatus(_ context.Context, status domain.JobStatus) ([]domain.IndexJob, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := []domain.IndexJob{}
+	for _, v := range m.jobs {
+		if v.Status == status {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
 func (m *Memory) RecordMetric(_ context.Context, p domain.MetricPoint) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -215,6 +215,11 @@ func (s *Service) UploadBlobs(ctx context.Context, inputs []FileInput) ([]string
 // as the lexical index is committed; vectors land in a background stage so
 // sync latency stays low (searches run degraded until then).
 func (s *Service) SyncRepository(ctx context.Context, repo domain.Repository, req SyncRequest) (domain.IndexJob, error) {
+	// Once accepted, a sync runs to a terminal job state even if the client
+	// hangs up: with the request context, a disconnect failed every later
+	// write — failJob's included — and left the job running and the
+	// repository indexing forever.
+	ctx = context.WithoutCancel(ctx)
 	start := time.Now()
 	repo.CurrentRevision++
 	repo.Status = domain.RepositoryIndexing
@@ -228,7 +233,7 @@ func (s *Service) SyncRepository(ctx context.Context, repo domain.Repository, re
 	if err := s.store.UpdateRepository(ctx, repo); err != nil {
 		return domain.IndexJob{}, err
 	}
-	job := domain.IndexJob{ID: identity.NewID("job"), RepositoryID: repo.ID, Repository: repo.Name, OwnerID: repo.OwnerID, Revision: repo.CurrentRevision, Status: domain.JobRunning, Priority: req.Priority, Stage: "parse", CreatedAt: start, StartedAt: start, FilesAdded: len(req.Files), FilesDeleted: len(req.DeletedPaths)}
+	job := domain.IndexJob{ID: identity.NewID("job"), RepositoryID: repo.ID, Repository: repo.Name, OwnerID: repo.OwnerID, Revision: repo.CurrentRevision, Status: domain.JobRunning, Priority: req.Priority, Stage: domain.StageParse, CreatedAt: start, StartedAt: start, FilesAdded: len(req.Files), FilesDeleted: len(req.DeletedPaths)}
 	if job.Priority == "" {
 		job.Priority = "realtime"
 	}
@@ -278,7 +283,12 @@ func (s *Service) SyncRepository(ctx context.Context, repo domain.Repository, re
 	}
 	repo.IndexedRevision = repo.CurrentRevision
 	repo.IndexLagMS = 0
-	repo.Status = domain.RepositoryHealthy
+	// repo is the copy loaded before the sync; a pause that landed meanwhile
+	// must survive this write-back.
+	if current, err := s.store.RepositoryByID(ctx, repo.ID); err == nil {
+		repo.Paused = current.Paused
+	}
+	repo.Settle(domain.RepositoryHealthy)
 	repo.LastSyncedAt = time.Now()
 	repo.UpdatedAt = repo.LastSyncedAt
 	if err := s.store.UpdateRepository(ctx, repo); err != nil {
@@ -291,7 +301,7 @@ func (s *Service) SyncRepository(ctx context.Context, repo domain.Repository, re
 	// (embedCandidatesNow), so results are not degraded while this catches up.
 	cfg := s.embeddingConfig(ctx)
 	if cfg.enabled() && len(names) > 0 {
-		job.Stage = "embedding"
+		job.Stage = domain.StageEmbedding
 		_ = s.store.UpdateJob(ctx, job)
 		s.events.Publish("index.progress", job)
 		go s.finishEmbedding(repo.ID, job, names, cfg, start)
@@ -302,8 +312,10 @@ func (s *Service) SyncRepository(ctx context.Context, repo domain.Repository, re
 }
 
 func (s *Service) completeJob(ctx context.Context, repoID string, job domain.IndexJob, start time.Time, embedErr error) {
-	job.Status = domain.JobCompleted
-	job.Stage = "commit"
+	if !s.transitionJob(&job, domain.JobCompleted) {
+		return
+	}
+	job.Stage = domain.StageCommit
 	if embedErr != nil {
 		job.Error = "embedding degraded: " + embedErr.Error()
 	}
@@ -323,9 +335,9 @@ func (s *Service) finishEmbedding(repoID string, job domain.IndexJob, blobNames 
 	s.completeJob(ctx, repoID, job, start, err)
 	if repo, rerr := s.store.RepositoryByID(ctx, repoID); rerr == nil {
 		if err != nil {
-			repo.Status = domain.RepositoryLagging
+			repo.Settle(domain.RepositoryLagging)
 		} else {
-			repo.Status = domain.RepositoryHealthy
+			repo.Settle(domain.RepositoryHealthy)
 		}
 		repo.UpdatedAt = time.Now()
 		_ = s.store.UpdateRepository(ctx, repo)
@@ -559,18 +571,73 @@ func (s *Service) releaseEmbedding(names []string) {
 }
 
 func (s *Service) failJob(ctx context.Context, repo domain.Repository, job domain.IndexJob, cause error) (domain.IndexJob, error) {
-	job.Status = domain.JobFailed
-	job.Stage = "failed"
+	if !s.transitionJob(&job, domain.JobFailed) {
+		return job, cause
+	}
+	job.Stage = domain.StageFailed
 	job.Error = cause.Error()
 	job.DurationMS = time.Since(job.CreatedAt).Milliseconds()
 	job.CompletedAt = time.Now()
 	_ = s.store.UpdateJob(ctx, job)
-	repo.Status = domain.RepositoryFailed
+	if current, err := s.store.RepositoryByID(ctx, repo.ID); err == nil {
+		repo.Paused = current.Paused
+	}
+	repo.Settle(domain.RepositoryFailed)
 	repo.IndexLagMS = job.DurationMS
 	repo.UpdatedAt = time.Now()
 	_ = s.store.UpdateRepository(ctx, repo)
 	s.events.Publish("index.failed", job)
 	return job, cause
+}
+
+// transitionJob moves job to next if the lifecycle allows it. An illegal move
+// is a bug in the caller, not a client error: it is logged and refused so a
+// terminal job is never silently revived or re-finished.
+func (s *Service) transitionJob(job *domain.IndexJob, next domain.JobStatus) bool {
+	if !job.Status.CanTransition(next) {
+		slog.Error("illegal index job transition", "job", job.ID, "from", job.Status, "to", next)
+		return false
+	}
+	job.Status = next
+	return true
+}
+
+// ReconcileInterruptedJobs settles jobs a previous process left running: a
+// crash or restart mid-sync otherwise leaves them running and their
+// repository indexing forever. Jobs that already reached the embedding
+// stage had their lexical index committed, so they complete with a note
+// (the periodic backfill embeds what is missing) and the repository is
+// lagging; earlier stages fail. Call once at startup, before serving —
+// the deployment is single-instance, so every running job is orphaned then.
+func (s *Service) ReconcileInterruptedJobs(ctx context.Context) {
+	jobs, err := s.store.JobsByStatus(ctx, domain.JobRunning)
+	if err != nil {
+		slog.Warn("job reconciliation skipped", "error", err)
+		return
+	}
+	for _, job := range jobs {
+		repoStatus := domain.RepositoryFailed
+		if job.Stage == domain.StageEmbedding {
+			job.Status, job.Stage = domain.JobCompleted, domain.StageCommit
+			repoStatus = domain.RepositoryLagging
+		} else {
+			job.Status, job.Stage = domain.JobFailed, domain.StageFailed
+		}
+		job.Error = domain.JobInterruptedError
+		job.CompletedAt = time.Now()
+		if err := s.store.UpdateJob(ctx, job); err != nil {
+			slog.Warn("job reconciliation failed", "job", job.ID, "error", err)
+			continue
+		}
+		if repo, err := s.store.RepositoryByID(ctx, job.RepositoryID); err == nil && (repo.Status == domain.RepositoryIndexing || repoStatus == domain.RepositoryLagging && repo.Status == domain.RepositoryHealthy) {
+			repo.Settle(repoStatus)
+			repo.UpdatedAt = time.Now()
+			_ = s.store.UpdateRepository(ctx, repo)
+		}
+	}
+	if len(jobs) > 0 {
+		slog.Info("reconciled interrupted index jobs", "count", len(jobs))
+	}
 }
 
 // ResolveCheckpoint materializes the effective blob set for an ACE search:
@@ -696,7 +763,7 @@ func (s *Service) SearchBlobNames(ctx context.Context, query string, names []str
 	}
 	if missing > 0 {
 		result.MissingBlobs = missing
-		result.FormattedRetrieval = fmt.Sprintf("Note: %d file(s) in your workspace snapshot were never uploaded to the server (an earlier upload was likely rejected by a storage or rate quota), so their content is invisible to this and future searches. Delete the local .bce-tool/index.bin cache to force a full re-upload once the quota allows.\n", missing) + result.FormattedRetrieval
+		result.FormattedRetrieval = fmt.Sprintf("Note: %d file(s) in your workspace snapshot were never uploaded to the server (an earlier upload was likely rejected by a storage or rate quota), so their content is invisible to this and future searches. Clear the client's local index cache (.bce-tool/index.bin for bce-tool, .bce/mcp.json for bce-mcp) to force a full re-upload once the quota allows.\n", missing) + result.FormattedRetrieval
 	}
 	// ACE searches are the only search traffic in MCP-only deployments;
 	// without this sample the overview latency profile sits at zero forever.

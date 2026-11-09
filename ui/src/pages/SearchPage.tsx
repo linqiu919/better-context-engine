@@ -9,6 +9,8 @@ import { Empty } from '../components/Empty'
 import { Score } from '../components/Score'
 import { compact, ms, projectLabel } from '../lib/format'
 import { useGlide } from '../hooks/useGlide'
+import { indexState } from '../lib/indexState'
+import { LoadError } from '../components/LoadError'
 
 // SearchPage runs a retrieval against one of the user's ready projects and
 // shows why each fragment was selected (ACE response + ranked hits).
@@ -16,19 +18,28 @@ export function SearchPage(){
   const {t}=useI18n()
   const [projects,setProjects]=useState<AceProject[]>([]),[project,setProject]=useState(''),[query,setQuery]=useState('')
   const [result,setResult]=useState<SearchResponse|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('')
-  const isReady=(p:AceProject)=>!!p.snapshot_id&&p.chunk_count>0&&p.embedded_count>=p.chunk_count
-  useEffect(()=>{
+  const [listError,setListError]=useState('')
+  const isReady=(p:AceProject)=>indexState(p).kind==='ready'
+  // Same lifecycle reading as the projects table: an empty snapshot shows
+  // "—", never a perpetual "Indexing".
+  const optionLabel=(p:AceProject)=>{const s=indexState(p),name=projectLabel(p.name,p.branch);return s.kind==='ready'?name:s.kind==='indexing'?`${name} · ${t('Indexing')} ${s.pct}%`:`${name} · —`}
+  const loadProjects=()=>{
+    setListError('')
     api<{projects:AceProject[]}>('/api/v1/me/ace-projects').then(v=>{
       const withSnapshot=v.projects.filter(p=>p.snapshot_id)
       setProjects(withSnapshot)
       const first=withSnapshot.find(isReady)
-      if(first)setProject(first.snapshot_id)
-    }).catch(()=>{})
-  },[])
+      if(first)setProject(cur=>cur||first.snapshot_id)
+    }).catch(e=>setListError((e as Error).message))
+  }
+  useEffect(loadProjects,[])
   const run=async()=>{
+    if(busy)return
+    // A failed run clears the previous result so its fragments are never
+    // shown under the new query's error.
     setBusy(true);setError('')
     try{setResult(await api('/api/v1/search/inspect',{method:'POST',...jsonBody({snapshot_id:project,query,max_output_length:0})}))}
-    catch(e){setError((e as Error).message)}
+    catch(e){setError((e as Error).message);setResult(null)}
     finally{setBusy(false)}
   }
   return <>
@@ -37,8 +48,9 @@ export function SearchPage(){
       <section className="query-panel">
         <label>{t('Project')}</label>
         <Select width="100%" value={project} onChange={v=>setProject(String(v))}>
-          {projects.map(p=><Select.Option key={(p.owner_id||'')+p.name+'\n'+(p.branch||'')} value={p.snapshot_id} disabled={!isReady(p)}>{isReady(p)?projectLabel(p.name,p.branch):`${projectLabel(p.name,p.branch)} · ${t('Indexing')}`}</Select.Option>)}
+          {projects.map(p=><Select.Option key={(p.owner_id||'')+p.name+'\n'+(p.branch||'')} value={p.snapshot_id} disabled={!isReady(p)}>{optionLabel(p)}</Select.Option>)}
         </Select>
+        {listError&&<LoadError error={listError} onRetry={loadProjects}/>}
         <label>{t('Information request')}</label>
         <textarea value={query} onChange={e=>setQuery(e.target.value)} rows={7} placeholder={t('e.g. Where is authentication implemented?')}/>
         <div className="query-hints"><span>{t('Natural language')}</span><span>{t('Account token budget')}</span><span>{t('Workspace overlay')}</span></div>

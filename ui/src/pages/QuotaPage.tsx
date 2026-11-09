@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Button, Loading } from '@geist-ui/core'
 import { api, jsonBody } from '../api'
 import type { QuotaSettings } from '../types'
@@ -6,15 +6,18 @@ import { useI18n } from '../i18n'
 import { PageHeader } from '../components/PageHeader'
 import { Panel } from '../components/Panel'
 import { Setting } from '../components/Setting'
+import { LoadError } from '../components/LoadError'
+import { useResource } from '../hooks/useResource'
 
 export function QuotaPage(){
   const {t}=useI18n()
-  const [settings,setSettings]=useState<QuotaSettings|null>(null)
+  const loaded=useResource(()=>api<QuotaSettings>('/api/v1/admin/settings/quota'),[])
+  const settings=loaded.data,setSettings=loaded.setData
   const [busy,setBusy]=useState(false)
   const [saved,setSaved]=useState(false)
   const [error,setError]=useState('')
-  useEffect(()=>{api<QuotaSettings>('/api/v1/admin/settings/quota').then(setSettings)},[])
-  const update=<K extends keyof QuotaSettings>(key:K,value:QuotaSettings[K])=>setSettings(current=>current?{...current,[key]:value}:current)
+  // An edit makes the last save outcome stale: drop the "saved" / error line.
+  const update=<K extends keyof QuotaSettings>(key:K,value:QuotaSettings[K])=>{setSettings(current=>current?{...current,[key]:value}:current);setSaved(false);setError('')}
   const save=async()=>{
     if(!settings)return
     setBusy(true);setSaved(false);setError('')
@@ -24,7 +27,7 @@ export function QuotaPage(){
     }catch(e){setError((e as Error).message)}
     finally{setBusy(false)}
   }
-  if(!settings)return <Loading/>
+  if(!settings)return loaded.error?<LoadError error={loaded.error} onRetry={loaded.reload}/>:<Loading/>
   return <>
     <PageHeader title={t('Quota & rate limits')} description={t('Default quotas for regular users and per-minute rate limits for BCE endpoints.')}/>
     <Panel title={t('Quota & rate limits')} meta="ADMIN ONLY">

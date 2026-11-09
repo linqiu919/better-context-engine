@@ -117,7 +117,7 @@ func (s *Service) ArchiveACEProject(ctx context.Context, userID, snapshotID stri
 		now := time.Now()
 		_ = s.store.CreateJob(ctx, domain.IndexJob{
 			ID: identity.NewID("job"), Repository: domain.ACEProjectLabel(name, branch), OwnerID: userID,
-			Status: domain.JobCompleted, Priority: "realtime", Stage: "index",
+			Status: domain.JobCompleted, Priority: "realtime", Stage: domain.StageIndex,
 			FilesAdded: added, FilesDeleted: deleted,
 			CreatedAt: now, StartedAt: now, CompletedAt: now,
 		})

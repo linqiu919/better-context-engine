@@ -197,7 +197,7 @@ func (s *Server) aceAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if got == "" {
-			writeError(w, http.StatusUnauthorized, "invalid ACE token")
+			writeErrorCode(w, http.StatusUnauthorized, errInvalidToken, "invalid ACE token")
 			return
 		}
 		if subtle.ConstantTimeCompare([]byte(got), []byte(s.config.ACEToken)) == 1 {
@@ -206,7 +206,7 @@ func (s *Server) aceAuth(next http.Handler) http.Handler {
 		}
 		user, err := s.store.UserByACETokenHash(r.Context(), hashToken(got))
 		if err != nil || user.Disabled {
-			writeError(w, http.StatusUnauthorized, "invalid ACE token")
+			writeErrorCode(w, http.StatusUnauthorized, errInvalidToken, "invalid ACE token")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(indexer.WithMetricUser(r.Context(), user.ID), userKey, user)))
@@ -281,12 +281,14 @@ func (s *Server) enforceQuota(w http.ResponseWriter, r *http.Request, kind strin
 		rpm, daily = q.RPMUpload, q.DailyUpload
 	}
 	if !s.allowRPM(r.Context(), user.ID, kind, rpm) {
+		setRetryAfter(w, s.rpmRetryAfter(time.Now()))
 		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("rate limit exceeded: at most %d %s requests per minute, please retry later", rpm, kind))
 		return false
 	}
 	used, usedErr := s.store.QuotaUsageToday(r.Context(), user.ID)
 	if usedErr == nil && used[kind] >= int64(daily) {
-		writeError(w, http.StatusTooManyRequests, fmt.Sprintf("daily %s quota exhausted (%d per day); it resets at midnight Beijing time, or an administrator can reset it", kind, daily))
+		setRetryAfter(w, untilQuotaReset(time.Now()))
+		writeErrorCode(w, http.StatusTooManyRequests, errQuotaExhausted, fmt.Sprintf("daily %s quota exhausted (%d per day); it resets at midnight Beijing time, or an administrator can reset it", kind, daily))
 		return false
 	}
 	if kind == "upload" {
@@ -298,12 +300,12 @@ func (s *Server) enforceQuota(w http.ResponseWriter, r *http.Request, kind strin
 		// project deletion clears the counter.
 		if usedErr == nil && used["upload_bytes"]+incomingBytes > limit {
 			s.setQuotaBlock(r.Context(), user.ID)
-			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("daily upload volume exceeds the storage limit (%d MB); it resets at midnight Beijing time, or remove projects to free the allowance", q.StorageLimitMB))
+			writeErrorCode(w, http.StatusRequestEntityTooLarge, errStorageLimit, fmt.Sprintf("daily upload volume exceeds the storage limit (%d MB); it resets at midnight Beijing time, or remove projects to free the allowance", q.StorageLimitMB))
 			return false
 		}
 		if s.userStorageBytes(r.Context(), user.ID)+incomingBytes > limit {
 			s.setQuotaBlock(r.Context(), user.ID)
-			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("storage limit exceeded (%d MB); remove projects or ask an administrator to raise the limit", q.StorageLimitMB))
+			writeErrorCode(w, http.StatusRequestEntityTooLarge, errStorageLimit, fmt.Sprintf("storage limit exceeded (%d MB); remove projects or ask an administrator to raise the limit", q.StorageLimitMB))
 			return false
 		}
 	}
@@ -655,7 +657,7 @@ func (s *Server) batchUpload(w http.ResponseWriter, r *http.Request) {
 	// a refused upload every few seconds for hours; without this, each retry
 	// paid JSON-decoding megabytes just to be told no again.
 	if user := currentUser(r); user.ID != "" && user.Role != domain.RoleAdmin && s.quotaBlocked(r.Context(), user.ID) {
-		writeError(w, http.StatusRequestEntityTooLarge, "storage or daily upload limit exceeded; remove projects to free space, or wait for the daily reset at midnight Beijing time")
+		writeErrorCode(w, http.StatusRequestEntityTooLarge, errStorageLimit, "storage or daily upload limit exceeded; remove projects to free space, or wait for the daily reset at midnight Beijing time")
 		return
 	}
 	var req struct {
@@ -836,14 +838,14 @@ func (s *Server) aceSearch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !owned {
-			writeError(w, http.StatusGone, "unknown checkpoint")
+			writeErrorCode(w, http.StatusGone, errCheckpointUnknown, "unknown checkpoint")
 			return
 		}
 	}
 	checkpointID, blobs, err := s.indexer.ResolveCheckpoint(r.Context(), checkpointID, req.Blobs.Added, req.Blobs.Deleted)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			writeError(w, http.StatusGone, "unknown checkpoint")
+			writeErrorCode(w, http.StatusGone, errCheckpointUnknown, "unknown checkpoint")
 			return
 		}
 		writeError(w, 500, err.Error())
@@ -869,7 +871,7 @@ func (s *Server) aceSearch(w http.ResponseWriter, r *http.Request) {
 		_ = s.store.RecordMetric(r.Context(), domain.MetricPoint{Scope: "ace", Name: "search_cache_hit", Value: 1, Timestamp: time.Now()})
 		s.recordACEUsage(r, "retrieval", entry.Tokens)
 		s.bumpQuota(r, "retrieval")
-		writeJSON(w, 200, map[string]any{"formatted_retrieval": entry.Formatted, "checkpoint_id": checkpointID})
+		writeJSON(w, 200, map[string]any{"formatted_retrieval": entry.Formatted, "checkpoint_id": checkpointID, "retrieval_status": retrievalStatus{Cached: true}})
 		return
 	}
 	_ = s.store.RecordMetric(r.Context(), domain.MetricPoint{Scope: "ace", Name: "search_cache_hit", Value: 0, Timestamp: time.Now()})
@@ -915,7 +917,32 @@ func (s *Server) aceSearch(w http.ResponseWriter, r *http.Request) {
 		"broad", result.Stages.Broad, "broad_ms", result.Stages.BroadMS)
 	s.recordACEUsage(r, "retrieval", int64(result.TokenEstimate))
 	s.bumpQuota(r, "retrieval")
-	writeJSON(w, 200, map[string]any{"formatted_retrieval": result.FormattedRetrieval, "checkpoint_id": checkpointID})
+	writeJSON(w, 200, map[string]any{"formatted_retrieval": result.FormattedRetrieval, "checkpoint_id": checkpointID, "retrieval_status": newRetrievalStatus(result)})
+}
+
+// retrievalStatus is the machine-readable side of a retrieval answer, added
+// next to the ACE fields (stock clients ignore it). Each flag names a state
+// that used to reach only the server log, so an agent can tell "nothing
+// relevant exists" apart from "this answer is partial, retry shortly".
+type retrievalStatus struct {
+	// Degraded: the semantic path did not contribute (embedding service in
+	// cooldown or vectors still being computed); results are lexical only.
+	Degraded bool `json:"degraded"`
+	// MissingBlobs: checkpoint files with no stored content; re-upload them.
+	MissingBlobs int `json:"missing_blobs"`
+	// Reranked: the first rerank round produced scores; false when the
+	// reranker is down, unconfigured or the latency budget ran out.
+	Reranked bool `json:"reranked"`
+	// Broad: the query was answered in broad (architecture) mode.
+	Broad bool `json:"broad"`
+	// Cached: served from the search cache without running the pipeline;
+	// only complete (non-degraded, ghost-free) answers are ever cached, and
+	// the per-run flags above are not recorded for them.
+	Cached bool `json:"cached"`
+}
+
+func newRetrievalStatus(result indexer.SearchResponse) retrievalStatus {
+	return retrievalStatus{Degraded: result.Degraded, MissingBlobs: result.MissingBlobs, Reranked: result.Stages.Reranked, Broad: result.Stages.Broad}
 }
 
 // promptEnhance implements the ACE /prompt-enhancer endpoint consumed by
@@ -956,8 +983,10 @@ func (s *Server) promptEnhance(w http.ResponseWriter, r *http.Request) {
 	}
 	// Too little to enhance ("1", "a", "?"): echo it back without retrieval,
 	// a model call or a quota charge — a rewrite could only guess.
+	// enhanced=false (a bce extension next to the ACE text field) tells an
+	// agent the echo is not a rewrite.
 	if indexer.PromptTooVague(prompt) {
-		writeJSON(w, 200, map[string]any{"text": prompt})
+		writeJSON(w, 200, map[string]any{"text": prompt, "enhanced": false})
 		return
 	}
 	if !s.enforceQuota(w, r, "enhance", 0) {
@@ -965,8 +994,8 @@ func (s *Server) promptEnhance(w http.ResponseWriter, r *http.Request) {
 	}
 	text, err := s.indexer.EnhancePrompt(r.Context(), currentUser(r).ID, workspaceMeta(req.ProjectName, req.Git), prompt, req.ChatHistory)
 	if err != nil {
-		if strings.Contains(err.Error(), "not configured") {
-			writeError(w, http.StatusNotImplemented, err.Error())
+		if errors.Is(err, indexer.ErrEnhancerNotConfigured) {
+			writeErrorCode(w, http.StatusNotImplemented, errEnhancerUnconfigured, err.Error())
 			return
 		}
 		writeError(w, 502, err.Error())
@@ -975,7 +1004,7 @@ func (s *Server) promptEnhance(w http.ResponseWriter, r *http.Request) {
 	s.recordACEUsage(r, "enhance", int64(len(text)/4))
 	s.bumpQuota(r, "enhance")
 	s.noteRetrievalUse(r.Context(), currentUser(r).ID)
-	writeJSON(w, 200, map[string]any{"text": text})
+	writeJSON(w, 200, map[string]any{"text": text, "enhanced": true})
 }
 
 // myACEUsage reports the caller's own MCP/ACE traffic as a per-day,
@@ -1121,7 +1150,7 @@ func (s *Server) syncRepository(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if repo.Paused {
-		writeError(w, 409, "repository is paused")
+		writeErrorCode(w, 409, errRepositoryPaused, "repository is paused")
 		return
 	}
 	var req indexer.SyncRequest
@@ -1148,11 +1177,7 @@ func (s *Server) pauseRepository(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repo.Paused = req.Paused
-	if req.Paused {
-		repo.Status = domain.RepositoryPaused
-	} else {
-		repo.Status = domain.RepositoryHealthy
-	}
+	repo.Settle(domain.RepositoryHealthy)
 	repo.UpdatedAt = time.Now()
 	if err := s.store.UpdateRepository(r.Context(), repo); err != nil {
 		writeError(w, 500, err.Error())
@@ -1518,9 +1543,19 @@ func (s *Server) retryJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "job not found")
 		return
 	}
+	// A retry is a new job over the repository's current files; retrying one
+	// that is still running would race it.
+	if !job.Status.Terminal() {
+		writeError(w, 409, "job is still "+string(job.Status))
+		return
+	}
 	repo, err := s.store.RepositoryByID(r.Context(), job.RepositoryID)
 	if err != nil {
 		writeError(w, 404, "repository not found")
+		return
+	}
+	if repo.Paused {
+		writeErrorCode(w, 409, errRepositoryPaused, "repository is paused")
 		return
 	}
 	files, _ := s.store.RepositoryFiles(r.Context(), repo.ID)
@@ -1542,12 +1577,12 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "job not found")
 		return
 	}
-	if job.Status != domain.JobQueued {
+	if !job.Status.CanTransition(domain.JobCancelled) {
 		writeError(w, 409, "only queued jobs can be cancelled")
 		return
 	}
 	job.Status = domain.JobCancelled
-	job.Stage = "cancelled"
+	job.Stage = domain.StageCancelled
 	job.CompletedAt = time.Now()
 	_ = s.store.UpdateJob(r.Context(), job)
 	s.audit(r.Context(), currentUser(r), "index_job.cancel", "index_job", job.ID, "success", nil)
@@ -1864,6 +1899,14 @@ func decode(w http.ResponseWriter, r *http.Request, target any) bool {
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
+		// An oversized body is a size problem, not malformed JSON: clients
+		// that see 413 + body_too_large know to split the batch, while 400
+		// told them to fix a request that was fine.
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeErrorCode(w, http.StatusRequestEntityTooLarge, errBodyTooLarge, fmt.Sprintf("request body exceeds %d MB; split the upload into smaller batches", tooLarge.Limit>>20))
+			return false
+		}
 		writeError(w, 400, "invalid JSON: "+err.Error())
 		return false
 	}
@@ -1874,6 +1917,15 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }
+
+// writeError answers {"error": text, "code": slug}. The text stays
+// human-oriented; code is the stable machine-readable half (see errcode.go)
+// so agents branch on it instead of substring-matching prose. Call sites
+// without a specific code get the generic one for their status.
 func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]any{"error": message})
+	writeErrorCode(w, status, statusErrCode(status), message)
+}
+
+func writeErrorCode(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, map[string]any{"error": message, "code": code})
 }

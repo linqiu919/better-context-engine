@@ -10,34 +10,47 @@ import { Pagination } from '../components/Pagination'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { usePaged } from '../hooks/usePaged'
 import { bytes, formatDate } from '../lib/format'
+import { useResource } from '../hooks/useResource'
+import { LoadError } from '../components/LoadError'
 
 // UsersPage (admin): accounts with today's usage against the shared limits
 // returned alongside the list; filter and paging are client-side.
 export function UsersPage(){
   const {t,language}=useI18n()
-  const [users,setUsers]=useState<User[]|null>(null)
-  const [limits,setLimits]=useState<QuotaSettings|null>(null)
+  const list=useResource(()=>api<{users:User[];limits:QuotaSettings}>('/api/v1/admin/users'),[])
+  const users=list.data?.users??null,limits=list.data?.limits??null
   const [query,setQuery]=useState('')
   const q=query.trim().toLowerCase()
   const visible=q?(users||[]).filter(u=>u.username.toLowerCase().includes(q)||(u.linuxdo_username||'').toLowerCase().includes(q)):(users||[])
   const userPager=usePaged(visible,5)
-  const load=()=>api<{users:User[];limits:QuotaSettings}>('/api/v1/admin/users').then(v=>{setUsers(v.users);setLimits(v.limits)}).catch(()=>setUsers(u=>u||[]))
-  useEffect(()=>{void load()},[])
-  const toggle=async(user:User)=>{await api(`/api/v1/admin/users/${user.id}`,{method:'PATCH',...jsonBody({disabled:!user.disabled})});load()}
+  useEffect(()=>userPager.setPage(1),[q])
+  const load=list.reload
+  // One enable/disable at a time per row; a failure is shown, not swallowed.
+  const [toggling,setToggling]=useState<string|null>(null)
+  const [toggleError,setToggleError]=useState('')
+  const toggle=async(user:User)=>{
+    if(toggling)return
+    setToggling(user.id);setToggleError('')
+    try{await api(`/api/v1/admin/users/${user.id}`,{method:'PATCH',...jsonBody({disabled:!user.disabled})});load()}
+    catch(e){setToggleError(`${user.username}: ${t((e as Error).message)}`)}
+    finally{setToggling(null)}
+  }
   const [pendingReset,setPendingReset]=useState<User|null>(null)
   const [resetting,setResetting]=useState(false)
   const [resetError,setResetError]=useState('')
   const confirmReset=async()=>{
-    if(!pendingReset)return
+    if(!pendingReset||resetting)return
     setResetting(true);setResetError('')
     try{await api(`/api/v1/admin/users/${pendingReset.id}/reset-quota`,{method:'POST'});setPendingReset(null);load()}
     catch(e){setResetError((e as Error).message)}
     finally{setResetting(false)}
   }
-  if(!users)return <Loading/>
+  if(!users)return list.error?<LoadError error={list.error} onRetry={list.reload}/>:<Loading/>
   return <>
     <PageHeader title={t('User management')} description={t('Local accounts, repository ownership and retrieval usage.')}
       actions={<Input crossOrigin="" scale={0.75} clearable placeholder={t('Filter by username')} aria-label={t('Filter by username')} value={query} onChange={e=>setQuery(e.target.value)}/>}/>
+    {list.error&&<LoadError error={list.error} onRetry={list.reload}/>}
+    {toggleError&&<p className="form-error">{toggleError}</p>}
     <div className="data-table-wrap" role="region" tabIndex={0}>
       <table className="data-table users-table">
         <thead><tr>
@@ -72,7 +85,7 @@ export function UsersPage(){
           <td>{formatDate(user.last_active_at,language)}</td>
           <td><div className="row-actions">
             {user.role!=='admin'&&<Button auto scale={.62} ghost onClick={()=>{setPendingReset(user);setResetError('')}}>{t('Reset')}</Button>}
-            {user.role!=='admin'&&<Button auto scale={.62} ghost onClick={()=>toggle(user)}>{t(user.disabled?'Enable':'Disable')}</Button>}
+            {user.role!=='admin'&&<Button auto scale={.62} ghost loading={toggling===user.id} disabled={!!toggling&&toggling!==user.id} onClick={()=>toggle(user)}>{t(user.disabled?'Enable':'Disable')}</Button>}
           </div></td>
         </tr>)}</tbody>
       </table>

@@ -30,10 +30,17 @@ export default function App(){
   const {t,language}=useI18n()
   const [auth,setAuth] = useState<AuthState|null>(null)
   const [loading,setLoading] = useState(true)
-  const [page,setPage] = useState<Page>(() => {const h=location.hash.slice(1) as Page;return allNav.some(i=>i.page===h)?h:'overview'})
+  // Console page follows the hash both ways: navigate() writes it and the
+  // hashchange listener reads it back, so Back/Forward switch pages too.
+  const parsePage=():Page|null=>{const h=location.hash.slice(1) as Page;return allNav.some(i=>i.page===h)?h:null}
+  const [page,setPage] = useState<Page>(() => parsePage()??'overview')
   const [dark,setDark] = useState(() => localStorage.getItem('bce-theme')==='dark')
   const [refresh,setRefresh] = useState(0)
   const [mobileNav,setMobileNav] = useState(false)
+  // SSE link state behind the topbar "Live" pill: connecting → open, and on
+  // a dropped stream reconnecting (the browser retries by itself; a stream it
+  // gave up on is recreated here with backoff).
+  const [live,setLive] = useState<'connecting'|'open'|'reconnecting'>('connecting')
   // Signed-out routing: the public landing page is the default; '#login',
   // '#register', '#mcp' and '#skill' show their screens, so the browser back
   // button works between them.
@@ -46,26 +53,49 @@ export default function App(){
   // dismissing it is recorded server-side until a newer one is published.
   const [announcement,setAnnouncement]=useState<Announcement|null>(null)
   useEffect(()=>{api<AuthState>('/api/v1/me').then(v=>{setCSRF(v.csrf_token);setAuth(v)}).catch(()=>setAuth(null)).finally(()=>setLoading(false))},[])
-  useEffect(()=>{if(!auth){setAnnouncement(null);return};api<{announcement:Announcement|null}>('/api/v1/me/announcement').then(v=>setAnnouncement(v.announcement)).catch(()=>{})},[auth])
+  useEffect(()=>{if(!auth){setAnnouncement(null);return};let alive=true;api<{announcement:Announcement|null}>('/api/v1/me/announcement').then(v=>{if(alive)setAnnouncement(v.announcement)}).catch(()=>{});return()=>{alive=false}},[auth])
   const dismissAnnouncement=()=>{if(!announcement)return;const id=announcement.id;setAnnouncement(null);api('/api/v1/me/announcement/dismiss',{method:'POST',...jsonBody({id})}).catch(()=>{})}
   // Topbar bell: reopen the latest announcement on demand — ?latest=1 skips
   // the dismissal filter, since dismissing only silences the sign-in popup.
   const showLatestAnnouncement=()=>{api<{announcement:Announcement|null}>('/api/v1/me/announcement?latest=1').then(v=>{if(v.announcement)setAnnouncement(v.announcement)}).catch(()=>{})}
   useEffect(()=>{api<AuthConfig>('/api/v1/auth/config').then(setAuthCfg).catch(()=>{})},[])
-  useEffect(()=>{const onHash=()=>setEntry(parseEntry());window.addEventListener('hashchange',onHash);return()=>window.removeEventListener('hashchange',onHash)},[])
+  useEffect(()=>{const onHash=()=>{setEntry(parseEntry());const p=parsePage();if(p)setPage(p)};window.addEventListener('hashchange',onHash);return()=>window.removeEventListener('hashchange',onHash)},[])
   useEffect(()=>{document.documentElement.dataset.theme=dark?'dark':'light';localStorage.setItem('bce-theme',dark?'dark':'light')},[dark])
   // Every search publishes latency.updated, so on a busy server it would
   // reload the open list page several times a second; it is coalesced to at
   // most one refresh per 15s (trailing, so the last search still shows).
-  // Indexing and project events stay immediate.
-  useEffect(()=>{if(!auth)return;const stream=new EventSource('/api/v1/events');const update=()=>setRefresh(v=>v+1);let last=0;let timer:number|undefined;const throttled=()=>{if(timer!==undefined)return;const wait=Math.max(0,last+15000-Date.now());timer=window.setTimeout(()=>{timer=undefined;last=Date.now();update()},wait)};['repository.updated','index.completed','index.failed','project.pending'].forEach(e=>stream.addEventListener(e,update));stream.addEventListener('latency.updated',throttled);return()=>{stream.close();if(timer!==undefined)window.clearTimeout(timer)}},[auth])
+  // Indexing and project events stay immediate. Events sent while the stream
+  // was down are not replayed, so every reconnect triggers one refresh.
+  useEffect(()=>{
+    if(!auth)return
+    setLive('connecting')
+    const update=()=>setRefresh(v=>v+1);let last=0;let timer:number|undefined
+    const throttled=()=>{if(timer!==undefined)return;const wait=Math.max(0,last+15000-Date.now());timer=window.setTimeout(()=>{timer=undefined;last=Date.now();update()},wait)}
+    let stream:EventSource|undefined,retry:number|undefined,backoff=1000,opened=false,disposed=false
+    const connect=()=>{
+      const s=stream=new EventSource('/api/v1/events')
+      s.onopen=()=>{setLive('open');backoff=1000;if(opened)update();opened=true}
+      s.onerror=()=>{
+        if(disposed)return
+        setLive('reconnecting')
+        if(s.readyState===EventSource.CLOSED){s.close();retry=window.setTimeout(connect,backoff);backoff=Math.min(backoff*2,30000)}
+      }
+      for(const e of ['repository.updated','index.completed','index.failed','project.pending'])s.addEventListener(e,update)
+      s.addEventListener('latency.updated',throttled)
+    }
+    connect()
+    return()=>{disposed=true;stream?.close();window.clearTimeout(retry);if(timer!==undefined)window.clearTimeout(timer)}
+  },[auth])
   // One active rail + hover fill slides across both nav sections. Called
   // before the early returns; the deps re-measure once the shell mounts.
   const navGlide=useGlide<HTMLDivElement>('.nav-item',[page,auth?.user.role,entry,loading,language])
   const toggleTheme=()=>setDark(v=>!v)
-  const signIn=(v:AuthState)=>{setCSRF(v.csrf_token);setAuth(v)}
+  // Sign-in leaves the #login/#register screen behind (replace, so Back does
+  // not return to a sign-in form); sign-out drops the CSRF token and the
+  // console page so the next account starts on the overview.
+  const signIn=(v:AuthState)=>{setCSRF(v.csrf_token);if(entry==='login'||entry==='register'){history.replaceState(null,'',location.pathname+location.search+'#'+page);setEntry('landing')};setAuth(v)}
   const navigate=(next:Page)=>{location.hash=next;setPage(next);setMobileNav(false)}
-  const logout=async()=>{await api('/api/v1/auth/logout',{method:'POST'}).catch(()=>{});location.hash='';setEntry('landing');setAuth(null)}
+  const logout=async()=>{await api('/api/v1/auth/logout',{method:'POST'}).catch(()=>{});setCSRF('');location.hash='';setEntry('landing');setPage('overview');setAuth(null)}
   if(loading)return <div className="center"><Loading>{t('Live index telemetry')}</Loading></div>
   if(!auth)return entry==='login'
     ?<Login onLogin={signIn} onBack={()=>{location.hash='';setEntry('landing')}} onRegister={()=>{location.hash='register';setEntry('register')}} cfg={authCfg} dark={dark} toggleTheme={toggleTheme}/>
@@ -80,15 +110,18 @@ export default function App(){
   // topbar buttons, which open a new tab): show the public page, not the console.
   if(entry==='mcp')return <McpPage dark={dark} toggleTheme={toggleTheme}/>
   if(entry==='skill')return <SkillPage dark={dark} toggleTheme={toggleTheme}/>
-  const current=allNav.find(i=>i.page===page)
-  const section=adminNav.some(i=>i.page===page)?'Administration':'Workspace'
+  // Admin pages are only reachable for admins: a non-admin arriving on one
+  // (typed or restored hash) sees the overview instead.
+  const shown:Page=auth.user.role!=='admin'&&adminNav.some(i=>i.page===page)?'overview':page
+  const current=allNav.find(i=>i.page===shown)
+  const section=adminNav.some(i=>i.page===shown)?'Administration':'Workspace'
   return <div className="app-shell">
     {mobileNav&&<button className="mobile-backdrop" aria-label={t('Close navigation')} onClick={()=>setMobileNav(false)}/>}
     <aside className={`sidebar ${mobileNav?'mobile-open':''}`} aria-label={t('Mobile navigation')}>
       <div className="brand"><BrandLogo size={22}/><div><strong>BCE{authCfg?.version&&<span className="brand-version">{authCfg.version}</span>}</strong><small>BETTER CONTEXT ENGINE</small></div></div>
       <div className="sidebar-nav glide" ref={navGlide.ref} {...navGlide.handlers}>
         {navGlide.layer}
-        <div className="nav-section"><span>{t('Workspace')}</span>{userNav.map(item=><NavItem key={item.page} {...item} active={page===item.page} onClick={()=>navigate(item.page)}/>)}</div>
+        <div className="nav-section"><span>{t('Workspace')}</span>{userNav.map(item=><NavItem key={item.page} {...item} active={shown===item.page} onClick={()=>navigate(item.page)}/>)}</div>
         {auth.user.role==='admin'&&<div className="nav-section"><span>{t('Administration')}</span>{adminNav.map(item=><NavItem key={item.page} {...item} active={page===item.page} onClick={()=>navigate(item.page)}/>)}</div>}
       </div>
       {/* LinuxDo 用户显示论坛原名 + 真实头像 + 等级徽章（本地用户名可能带重名后缀，如 bifang-2） */}
@@ -110,7 +143,7 @@ export default function App(){
           <nav className="crumb" aria-label={t('Current page')}><span>{t(section)}</span><span className="crumb-sep" aria-hidden="true">/</span><strong>{t(current?.label??'Overview')}</strong></nav>
         </div>
         <div className="top-actions">
-          <div className="live-state" title={t('Live index telemetry')}><span className="pulse"/><span className="live-label">{t('Live')}</span></div>
+          <div className={`live-state ${live==='open'?'':'offline'}`} title={t('Live index telemetry')} role="status"><span className="pulse"/><span className="live-label">{t(live==='open'?'Live':live==='connecting'?'Connecting':'Reconnecting')}</span></div>
           <ToolGroup>
             <button className="icon-button" onClick={showLatestAnnouncement} aria-label={t('View latest announcement')}><Bell size={16}/></button>
             <button className="icon-button" onClick={()=>window.open(DOCS_URL,'_blank','noopener')} aria-label={t('Open documentation')}><BookOpen size={17}/></button>
@@ -121,7 +154,7 @@ export default function App(){
           </ToolGroup>
         </div>
       </header>
-      <div className={`page-container page-${page}`}><PageContent page={page} auth={auth} refresh={refresh}/></div>
+      <div className={`page-container page-${shown}`}><PageContent page={shown} auth={auth} refresh={refresh}/></div>
     </main>
     {announcement&&<div className="modal-backdrop"><div className="modal-card announcement-card" role="dialog" aria-modal="true" aria-label={t('Announcement')}>
       <span className="announcement-kicker"><Bell size={13}/>{t('Announcement')}</span>

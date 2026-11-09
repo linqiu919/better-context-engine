@@ -20,11 +20,18 @@ export function Register({onLogin,onBack,cfg,dark,toggleTheme}:{onLogin:(a:AuthS
   const [error,setError]=useState(''),[notice,setNotice]=useState(''),[busy,setBusy]=useState(false)
   const [sending,setSending]=useState(false),[countdown,setCountdown]=useState(0)
   const [tsToken,setTsToken]=useState(''),[tsReset,setTsReset]=useState(0)
+  // The whitelist may arrive after mount: re-pick when the chosen domain is
+  // not one of the offered options.
+  useEffect(()=>{if(!domains.includes(emailDomain))setEmailDomain(domains[0])},[domains.join(','),emailDomain])
+  // The send cooldown and "code sent" note belong to one address; editing
+  // the email starts over.
+  useEffect(()=>{setCountdown(0);setNotice('')},[email])
   useEffect(()=>{if(countdown<=0)return;const timer=setTimeout(()=>setCountdown(v=>v-1),1000);return()=>clearTimeout(timer)},[countdown])
   // Turnstile tokens are single-use: both sending a code and submitting the
   // form consume one, so request a fresh token after each server call.
   const consumeToken=()=>{setTsToken('');setTsReset(v=>v+1)}
   const sendCode=async()=>{
+    if(sending||busy)return
     setSending(true);setError('');setNotice('')
     try{await api('/api/v1/auth/register/send-code',{method:'POST',...jsonBody({email,turnstile_token:tsToken})});setNotice('Code sent');setCountdown(60)}
     catch(e){setError((e as Error).message)}
@@ -32,11 +39,12 @@ export function Register({onLogin,onBack,cfg,dark,toggleTheme}:{onLogin:(a:AuthS
   }
   const submit=async(e:React.FormEvent)=>{
     e.preventDefault()
+    if(busy||sending)return
     if(password!==confirm){setError('Passwords do not match');return}
+    // Success unmounts this screen, so busy is only cleared on failure.
     setBusy(true);setError('');setNotice('')
     try{onLogin(await api<AuthState>('/api/v1/auth/register',{method:'POST',...jsonBody({username,email,code,password,confirm_password:confirm,turnstile_token:tsToken})}))}
-    catch(e){setError((e as Error).message);consumeToken()}
-    finally{setBusy(false)}
+    catch(e){setError((e as Error).message);consumeToken();setBusy(false)}
   }
   return <LoginShell onBack={onBack} dark={dark} toggleTheme={toggleTheme} onSubmit={submit}>
     <span className="login-fields-title">{t('Create account')}</span>
@@ -51,7 +59,7 @@ export function Register({onLogin,onBack,cfg,dark,toggleTheme}:{onLogin:(a:AuthS
     </div>
     <div className="code-row">
       <Input crossOrigin="" width="100%" autoComplete="one-time-code" value={code} onChange={e=>setCode(e.target.value)}>{t('Verification code')}</Input>
-      <Button auto className="code-btn" onClick={sendCode} disabled={sending||countdown>0||!email||(!!cfg?.turnstile_site_key&&!tsToken)} loading={sending}>{countdown>0?`${countdown}s`:t('Send code')}</Button>
+      <Button auto className="code-btn" onClick={sendCode} disabled={sending||busy||countdown>0||!email||(!!cfg?.turnstile_site_key&&!tsToken)} loading={sending}>{countdown>0?`${countdown}s`:t('Send code')}</Button>
     </div>
     <Input.Password crossOrigin="" width="100%" autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)}>{t('Password')}</Input.Password>
     <Input.Password crossOrigin="" width="100%" autoComplete="new-password" value={confirm} onChange={e=>setConfirm(e.target.value)}>{t('Confirm password')}</Input.Password>

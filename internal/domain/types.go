@@ -88,6 +88,16 @@ type Repository struct {
 	Paused          bool             `json:"paused"`
 }
 
+// Settle sets the status an indexing step arrived at, unless the owner paused
+// the repository meanwhile: Paused is user intent and outranks any status a
+// background step computes, so pause and status can never disagree.
+func (r *Repository) Settle(status RepositoryStatus) {
+	if r.Paused {
+		status = RepositoryPaused
+	}
+	r.Status = status
+}
+
 type Blob struct {
 	Name      string    `json:"name"`
 	Path      string    `json:"path"`
@@ -181,6 +191,44 @@ const (
 	JobFailed    JobStatus = "failed"
 	JobCancelled JobStatus = "cancelled"
 )
+
+// jobTransitions is the whole job lifecycle: the only legal status moves.
+// Terminal statuses (completed, failed, cancelled) have no exits; a retry is
+// a new job, never a revived one.
+var jobTransitions = map[JobStatus][]JobStatus{
+	JobQueued:  {JobRunning, JobCancelled},
+	JobRunning: {JobCompleted, JobFailed},
+}
+
+// CanTransition reports whether a job may move from s to next.
+func (s JobStatus) CanTransition(next JobStatus) bool {
+	for _, to := range jobTransitions[s] {
+		if to == next {
+			return true
+		}
+	}
+	return false
+}
+
+// Terminal reports whether the status has no further transitions.
+func (s JobStatus) Terminal() bool { return len(jobTransitions[s]) == 0 }
+
+// JobStage names where a job is (or ended). Status says whether it is alive;
+// stage says which step it reached, so failed jobs keep the stage that broke.
+type JobStage = string
+
+const (
+	StageParse     JobStage = "parse"     // blobs, chunks and postings being written
+	StageEmbedding JobStage = "embedding" // lexical index committed, vectors in the background
+	StageCommit    JobStage = "commit"    // finished
+	StageIndex     JobStage = "index"     // ACE activity record (always completed)
+	StageFailed    JobStage = "failed"
+	StageCancelled JobStage = "cancelled"
+)
+
+// JobInterruptedError is recorded on jobs a dead process left running, so
+// the console tells a restart apart from a real indexing failure.
+const JobInterruptedError = "interrupted: the server restarted while this job was running"
 
 type IndexJob struct {
 	ID           string    `json:"id"`

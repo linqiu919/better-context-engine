@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { prefersReducedMotion } from '../lib/motion'
 
 const FADE=180
@@ -12,6 +12,8 @@ export function useLeaving<T extends HTMLElement>(){
   const ref=useRef<T>(null)
   const [leaving,setLeaving]=useState<string|null>(null)
   const before=useRef<Map<string,number>|null>(null)
+  const timer=useRef<number>()
+  useEffect(()=>()=>window.clearTimeout(timer.current),[])
   const rows=()=>[...ref.current?.querySelectorAll<HTMLElement>('[data-key]')??[]]
   useLayoutEffect(()=>{
     const prev=before.current
@@ -24,10 +26,13 @@ export function useLeaving<T extends HTMLElement>(){
       if(dy)el.animate([{transform:`translateY(${dy}px)`},{transform:'none'}],{duration:280,easing:'cubic-bezier(.16,1,.3,1)'})
     }
   })
+  // A row already fading out ignores a second leave (callers also disable its
+  // delete action via `leaving`); the fade timer is cleared on unmount.
   const leave=(key:string,drop:()=>void)=>{
+    if(leaving===key)return
     if(prefersReducedMotion()){drop();return}
     setLeaving(key)
-    window.setTimeout(()=>{
+    timer.current=window.setTimeout(()=>{
       before.current=new Map(rows().map(el=>[el.dataset.key!,el.getBoundingClientRect().top]))
       drop();setLeaving(null)
     },FADE)

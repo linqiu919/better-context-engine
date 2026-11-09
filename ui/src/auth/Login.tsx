@@ -15,10 +15,13 @@ export function Login({onLogin,onBack,onRegister,cfg,dark,toggleTheme}:{onLogin:
   // string; surface it once and clean the URL.
   useEffect(()=>{const reason=new URLSearchParams(location.search).get('oauth_error');if(reason){setError(reason);history.replaceState(null,'',location.pathname+location.hash)}},[])
   const submit=async(e:React.FormEvent)=>{
-    e.preventDefault();setBusy(true);setError('')
+    // Enter in a field still submits while the button only shows `loading`,
+    // so the busy guard lives here. Success unmounts this screen, so busy is
+    // only cleared on failure.
+    e.preventDefault();if(busy)return
+    setBusy(true);setError('')
     try{onLogin(await api<AuthState>('/api/v1/auth/login',{method:'POST',...jsonBody({username,password,turnstile_token:tsToken})}))}
-    catch(e){setError((e as Error).message);setTsToken('');setTsReset(v=>v+1)}
-    finally{setBusy(false)}
+    catch(e){setError((e as Error).message);setTsToken('');setTsReset(v=>v+1);setBusy(false)}
   }
   return <LoginShell onBack={onBack} dark={dark} toggleTheme={toggleTheme} onSubmit={submit}>
     <span className="login-fields-title">{t('Sign in')}</span>

@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -197,10 +198,14 @@ func skipQueryLLM(ctx context.Context) bool {
 // attributed checkpoint fall back to the globally most recent snapshot.
 // Retrieval failures degrade to enhancement without context; only a missing
 // configuration or a failing chat model returns an error.
+// ErrEnhancerNotConfigured marks the one EnhancePrompt failure that is a
+// deployment state rather than an upstream fault (HTTP 501, not 502).
+var ErrEnhancerNotConfigured = errors.New("prompt enhancer is not configured: set enhancer_url and enhancer_model")
+
 func (s *Service) EnhancePrompt(ctx context.Context, userID string, ws WorkspaceMeta, prompt string, history []ChatTurn) (string, error) {
 	cfg := s.enhanceConfig(ctx)
 	if !cfg.enabled() {
-		return "", fmt.Errorf("prompt enhancer is not configured: set enhancer_url and enhancer_model")
+		return "", ErrEnhancerNotConfigured
 	}
 	started := time.Now()
 	contextBlock := ""

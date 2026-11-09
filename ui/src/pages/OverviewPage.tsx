@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Loading } from '@geist-ui/core'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { api } from '../api'
@@ -9,21 +9,19 @@ import { Panel } from '../components/Panel'
 import { MetricStrip } from '../components/MetricStrip'
 import { chartAxis, chartTooltip } from '../components/chartTheme'
 import { useGlide } from '../hooks/useGlide'
+import { useResource } from '../hooks/useResource'
+import { LoadError } from '../components/LoadError'
 import { bytes, clock, compact, ms } from '../lib/format'
 
 export function OverviewPage({refresh}:{refresh:number}){
   const {t}=useI18n()
-  const [data,setData]=useState<Overview|null>(null)
   // Latency scope: site-wide by default, "me" narrows to the caller's own
   // searches. Switching keeps the current data on screen until the refetch
   // lands; a late response for the previous scope is dropped.
   const [scope,setScope]=useState<'all'|'me'>('all')
-  useEffect(()=>{
-    let live=true
-    api<Overview>(scope==='me'?'/api/v1/overview?scope=me':'/api/v1/overview').then(v=>{if(live)setData(v)})
-    return()=>{live=false}
-  },[refresh,scope])
-  if(!data)return <Loading/>
+  const overview=useResource(()=>api<Overview>(scope==='me'?'/api/v1/overview?scope=me':'/api/v1/overview'),[refresh,scope])
+  const data=overview.data
+  if(!data)return overview.error?<LoadError error={overview.error} onRetry={overview.reload}/>:<Loading/>
   return <div className="overview-page">
     <PageHeader title={t('Index overview')} description={t('Current retrieval health across your repositories.')}/>
     <MetricStrip values={[

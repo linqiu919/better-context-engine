@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import { Loading } from '@geist-ui/core'
 import { api } from '../api'
 import type { AuditEvent } from '../types'
@@ -9,13 +8,15 @@ import { Empty } from '../components/Empty'
 import { Pagination } from '../components/Pagination'
 import { usePaged } from '../hooks/usePaged'
 import { formatDate, short } from '../lib/format'
+import { useResource } from '../hooks/useResource'
+import { LoadError } from '../components/LoadError'
 
 export function AuditPage(){
   const {t,language}=useI18n()
-  const [events,setEvents]=useState<AuditEvent[]|null>(null)
+  const list=useResource(()=>api<{events:AuditEvent[]}>('/api/v1/admin/audit-log').then(v=>v.events||[]),[])
+  const events=list.data
   const {page,setPage,paged,total}=usePaged(events||[])
-  useEffect(()=>{api<{events:AuditEvent[]}>('/api/v1/admin/audit-log').then(v=>setEvents(v.events||[])).catch(()=>setEvents([]))},[])
-  if(!events)return <Loading/>
+  if(!events)return list.error?<LoadError error={list.error} onRetry={list.reload}/>:<Loading/>
   return <>
     <PageHeader title={t('Audit log')} description={t('Immutable record of authentication and privileged actions.')}/>
     <div className="data-table-wrap" role="region" tabIndex={0}>

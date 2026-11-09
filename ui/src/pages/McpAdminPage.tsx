@@ -9,6 +9,8 @@ import { MetricStrip } from '../components/MetricStrip'
 import { Pagination } from '../components/Pagination'
 import { usePaged } from '../hooks/usePaged'
 import { compact, formatDate } from '../lib/format'
+import { useResource } from '../hooks/useResource'
+import { LoadError } from '../components/LoadError'
 import { RangeSwitch, USAGE_ENDPOINTS, UsageTrend, usageColor, usageTotals, usageWindowMeta } from './usageShared'
 
 // Per-user view is merged client-side: the API returns one row per
@@ -19,8 +21,9 @@ export function McpAdminPage(){
   const {t,language}=useI18n()
   const [days,setDays]=useState(7)
   const [query,setQuery]=useState('')
-  const [data,setData]=useState<{usage:AceUsage[];daily:AceUsageDay[]}|null>(null)
-  useEffect(()=>{api<{usage:AceUsage[];daily:AceUsageDay[]}>(`/api/v1/admin/ace-usage?days=${days}`).then(v=>setData({usage:v.usage||[],daily:v.daily||[]})).catch(()=>setData({usage:[],daily:[]}))},[days])
+  // Rows carry the window they were loaded for (see McpUsagePage).
+  const loaded=useResource(()=>api<{usage:AceUsage[];daily:AceUsageDay[]}>(`/api/v1/admin/ace-usage?days=${days}`).then(v=>({days,usage:v.usage||[],daily:v.daily||[]})),[days])
+  const data=loaded.data
   const merged=(()=>{
     const by=new Map<string,MergedUsage>()
     for(const r of data?.usage||[]){
@@ -35,13 +38,16 @@ export function McpAdminPage(){
   const q=query.trim().toLowerCase()
   const visible=q?merged.filter(r=>(r.username==='shared-token'?t('shared-token'):r.username).toLowerCase().includes(q)):merged
   const pager=usePaged(visible)
-  if(!data)return <Loading/>
+  useEffect(()=>pager.setPage(1),[q])
+  if(!data)return loaded.error?<LoadError error={loaded.error} onRetry={loaded.reload}/>:<Loading/>
+  const shown=data.days
   const totals=usageTotals(data.daily)
   const totalCalls=USAGE_ENDPOINTS.reduce((s,e)=>s+totals[e].calls,0)
   const accounts=new Set(data.usage.filter(r=>r.user_id).map(r=>r.user_id)).size
   const endpointCell=(r:MergedUsage,e:string)=>{const v=r.per[e];return v?<span className="usage-chip"><i className="usage-dot" style={{background:usageColor[e]||'var(--muted)'}}/>{compact(v.calls)} · {compact(v.units)}</span>:<>—</>}
   return <div className="usage-page">
     <PageHeader title={t('MCP management')} description={t('MCP traffic and trends across all accounts.')} actions={<RangeSwitch days={days} onChange={setDays}/>}/>
+    {loaded.error&&<LoadError error={loaded.error} onRetry={loaded.reload}/>}
     <MetricStrip values={[
       [t('Total calls'),compact(totalCalls)],
       [t('Active accounts'),accounts],
@@ -49,8 +55,8 @@ export function McpAdminPage(){
       [t('Upload blobs'),compact(totals.upload.units)],
       [t('Enhance tokens'),compact(totals.enhance.units)],
     ]}/>
-    <Panel title={t('Daily activity')} meta={t(usageWindowMeta(days))}><UsageTrend daily={data.daily} days={days}/></Panel>
-    <Panel title={t('Per-user usage')} meta={t(usageWindowMeta(days))}>
+    <Panel title={t('Daily activity')} meta={t(usageWindowMeta(shown))}><UsageTrend daily={data.daily} days={shown}/></Panel>
+    <Panel title={t('Per-user usage')} meta={t(usageWindowMeta(shown))}>
       {data.usage.length===0?<p className="settings-intro">{t('No MCP calls recorded yet.')}</p>:<>
         <div className="usage-filter-row">
           <p className="settings-intro">{t('Cells show calls · units. Units: retrieval = context tokens served, upload = blobs, enhance = output tokens.')}</p>

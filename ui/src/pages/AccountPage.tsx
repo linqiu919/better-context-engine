@@ -9,19 +9,32 @@ import { Panel } from '../components/Panel'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { QuotaBar } from '../components/QuotaBar'
 import { useCopy } from '../hooks/useCopy'
+import { useResource } from '../hooks/useResource'
+import { LoadError } from '../components/LoadError'
 import { bytes, formatDate, maskToken, projectLabel } from '../lib/format'
 
 export function AccountPage({user}:{user:User}){
   const {t,language}=useI18n()
-  const [aceToken,setAceToken]=useState('')
+  // Token states: loading → present ('' = none yet) | unknown (fetch failed).
+  // An unknown token must not offer "Generate": generating revokes whatever
+  // token the user's clients are already using.
+  const token=useResource(()=>api<{token:string}>('/api/v1/me/ace-token').then(v=>v.token),[])
+  const aceToken=token.data??''
   const [busy,setBusy]=useState(false)
+  const [genError,setGenError]=useState('')
+  const [confirmRegen,setConfirmRegen]=useState(false)
   const [copied,copy]=useCopy()
   const [quota,setQuota]=useState<QuotaStatus|null>(null)
   useEffect(()=>{
-    api<{token:string}>('/api/v1/me/ace-token').then(v=>setAceToken(v.token)).catch(()=>{})
     api<QuotaStatus>('/api/v1/me/quota').then(setQuota).catch(()=>{})
   },[])
-  const generate=async()=>{setBusy(true);try{const v=await api<{token:string}>('/api/v1/me/ace-token',{method:'POST'});setAceToken(v.token)}finally{setBusy(false)}}
+  const generate=async()=>{
+    if(busy)return
+    setBusy(true);setGenError('')
+    try{const v=await api<{token:string}>('/api/v1/me/ace-token',{method:'POST'});token.setData(v.token);setConfirmRegen(false)}
+    catch(e){setGenError((e as Error).message)}
+    finally{setBusy(false)}
+  }
   return <>
     <PageHeader title={t('Account settings')} description={t('Local identity and session details.')}/>
     <div className="account-columns">
@@ -40,14 +53,22 @@ export function AccountPage({user}:{user:User}){
     <div className="account-columns">
       <Panel title={t('BCE token')}>
         <p className="settings-intro">{t('Personal token for MCP / BCE clients. Generating a new token invalidates the previous one.')}</p>
-        {aceToken
+        {token.data===null
+          ?token.error?<LoadError error={token.error} onRetry={token.reload}/>:<Loading/>
+          :aceToken
           ?<div className="token-row">
             <code className="inline-code">{maskToken(aceToken)}</code>
             <button type="button" className="icon-button" onClick={()=>copy(aceToken)} aria-label={t('Copy token')} title={t(copied?'Copied':'Copy token')}>{copied?<Check size={14}/>:<Copy size={14}/>}</button>
             {copied&&<small className="token-copied">{t('Copied')}</small>}
           </div>
           :<p className="settings-intro">{t('No token generated yet.')}</p>}
-        <div className="settings-actions"><Button auto loading={busy} onClick={generate}>{t(aceToken?'Regenerate BCE token':'Generate BCE token')}</Button></div>
+        {genError&&!confirmRegen&&<p className="form-error">{genError}</p>}
+        {token.data!==null&&<div className="settings-actions"><Button auto loading={busy} onClick={()=>aceToken?setConfirmRegen(true):void generate()}>{t(aceToken?'Regenerate BCE token':'Generate BCE token')}</Button></div>}
+        {confirmRegen&&<ConfirmModal
+          title={t('Regenerate BCE token')}
+          text={t('The current token stops working immediately; every MCP / BCE client using it must be updated with the new one.')}
+          confirmLabel={t('Regenerate')} danger busy={busy} error={genError}
+          onCancel={()=>{setConfirmRegen(false);setGenError('')}} onConfirm={()=>void generate()}/>}
       </Panel>
       <Panel title={t('Usage & limits')}>
         {!quota?<Loading/>
@@ -97,7 +118,7 @@ function RetrievalPrefPanel({user}:{user:User}){
       <span className="pref-label">{t('Max output per retrieval (tokens)')}</span>
       <div className="pref-controls">
         {saved&&<span className="pref-saved">{t('Configuration saved')}</span>}
-        <input type="number" min={1600} max={24000} step={800} value={value} onChange={e=>{setValue(Number(e.target.value)||0);setSaved(false)}}/>
+        <input type="number" min={1600} max={24000} step={800} value={value} onChange={e=>{setValue(Number(e.target.value)||0);setSaved(false);setError('')}}/>
         <Button auto scale={.6} loading={busy} disabled={value<1600||value>24000} onClick={save}>{t('Save')}</Button>
       </div>
     </div>

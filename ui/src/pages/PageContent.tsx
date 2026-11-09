@@ -16,13 +16,13 @@ import { AuditPage } from './AuditPage'
 // SSE index events so data pages can reload.
 export function PageContent({page,auth,refresh}:{page:Page;auth:AuthState;refresh:number}){
   switch(page){
-    case'repositories':return <RepositoriesPage refresh={refresh}/>
+    case'repositories':return <RepositoriesPage key='mine' refresh={refresh}/>
     case'search':return <SearchPage/>
     case'mcp-usage':return <McpUsagePage/>
     case'account':return <AccountPage user={auth.user}/>
     case'users':return <UsersPage/>
     case'analytics':return <AnalyticsPage/>
-    case'all-repositories':return <RepositoriesPage admin refresh={refresh}/>
+    case'all-repositories':return <RepositoriesPage key='all' admin refresh={refresh}/>
     case'mcp-admin':return <McpAdminPage/>
     case'infrastructure':return <InfrastructurePage/>
     case'quota':return <QuotaPage/>

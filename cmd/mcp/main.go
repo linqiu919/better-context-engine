@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,7 +15,39 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
+
+// uploadBatchBytes keeps each /batch-upload body under the server's 8 MB
+// request cap (JSON escaping inflates content, hence the headroom).
+const uploadBatchBytes = 4 << 20
+
+// httpClient bounds every call: the stdio loop is sequential, so one stalled
+// request would otherwise block all later tool calls forever.
+var httpClient = &http.Client{Timeout: 2 * time.Minute}
+
+// apiError is a non-2xx server answer. Code is the server's machine-readable
+// error slug ({"error","code"} body); branch on it, never on Message.
+type apiError struct {
+	Status     int
+	Code       string
+	Message    string
+	RetryAfter string
+}
+
+func (e *apiError) Error() string {
+	text := fmt.Sprintf("HTTP %d", e.Status)
+	if e.Code != "" {
+		text += " [" + e.Code + "]"
+	}
+	if e.Message != "" {
+		text += ": " + e.Message
+	}
+	if e.RetryAfter != "" {
+		text += " (retry after " + e.RetryAfter + "s)"
+	}
+	return text
+}
 
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
@@ -78,7 +111,10 @@ func handle(req rpcRequest) rpcResponse {
 		}
 		text, err := search(params.Arguments.ProjectRoot, params.Arguments.Query)
 		if err != nil {
-			text = "Error: " + err.Error()
+			// isError marks a tool failure (MCP spec) so the agent does not
+			// mistake the error text for search results.
+			result.Result = map[string]any{"content": []any{map[string]string{"type": "text", "text": "Error: " + err.Error()}}, "isError": true}
+			break
 		}
 		result.Result = map[string]any{"content": []any{map[string]string{"type": "text", "text": text}}}
 	default:
@@ -95,7 +131,8 @@ func search(root, query string) (string, error) {
 	token := env("ACE_TOKEN", "development-token")
 	state := loadState(root)
 	formatted, next, err := searchDelta(base, token, query, files, state)
-	if err != nil && strings.Contains(err.Error(), "unknown checkpoint") {
+	var apiErr *apiError
+	if errors.As(err, &apiErr) && (apiErr.Code == "checkpoint_unknown" || apiErr.Status == http.StatusGone) {
 		// Server lost our checkpoint (restart, retention): reset and re-upload.
 		formatted, next, err = searchDelta(base, token, query, files, clientState{})
 	}
@@ -132,13 +169,19 @@ func searchDelta(base, token, query string, files []blob, state clientState) (st
 	}
 	sort.Strings(addedNames)
 	sort.Strings(deleted)
-	if len(added) > 0 {
+	for start := 0; start < len(added); {
+		end, size := start, 0
+		for end < len(added) && (end == start || size+len(added[end].Content) <= uploadBatchBytes) {
+			size += len(added[end].Content)
+			end++
+		}
 		var uploaded struct {
 			Names []string `json:"blob_names"`
 		}
-		if err := post(base+"/batch-upload", token, map[string]any{"blobs": added}, &uploaded); err != nil {
+		if err := post(base+"/batch-upload", token, map[string]any{"blobs": added[start:end]}, &uploaded); err != nil {
 			return "", state, err
 		}
+		start = end
 	}
 	var checkpoint any
 	if state.CheckpointID != "" {
@@ -201,7 +244,12 @@ func saveState(root string, state clientState) error {
 		return err
 	}
 	raw, _ := json.MarshalIndent(state, "", "  ")
-	return os.WriteFile(filepath.Join(dir, "mcp.json"), raw, 0600)
+	// Write-then-rename so a crash mid-write never leaves a torn state file.
+	tmp := filepath.Join(dir, "mcp.json.tmp")
+	if err := os.WriteFile(tmp, raw, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, filepath.Join(dir, "mcp.json"))
 }
 func post(url, token string, input, output any) error {
 	raw, _ := json.Marshal(input)
@@ -211,14 +259,24 @@ func post(url, token string, input, output any) error {
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	res, err := http.DefaultClient.Do(req)
+	res, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer res.Body.Close()
 	if res.StatusCode >= 300 {
 		body, _ := io.ReadAll(res.Body)
-		return fmt.Errorf("%s", body)
+		apiErr := &apiError{Status: res.StatusCode, RetryAfter: res.Header.Get("Retry-After")}
+		var parsed struct {
+			Error string `json:"error"`
+			Code  string `json:"code"`
+		}
+		if json.Unmarshal(body, &parsed) == nil && parsed.Error != "" {
+			apiErr.Code, apiErr.Message = parsed.Code, parsed.Error
+		} else {
+			apiErr.Message = strings.TrimSpace(string(body))
+		}
+		return apiErr
 	}
 	return json.NewDecoder(res.Body).Decode(output)
 }
