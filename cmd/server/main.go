@@ -50,6 +50,7 @@ func main() {
 	}
 	idx.ReconcileInterruptedJobs(ctx)
 	idx.StartEmbeddingBackfill()
+	idx.StartOrphanGC()
 	// Expired session rows are already invisible to reads; this loop keeps
 	// them from accumulating in the table forever.
 	go func() {

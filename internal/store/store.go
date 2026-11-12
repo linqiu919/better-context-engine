@@ -13,6 +13,17 @@ var (
 	ErrConflict = errors.New("conflict")
 )
 
+// OrphanCollector is implemented by stores that accumulate unreferenced
+// checkpoint snapshots (every client sync mints a new content-addressed
+// checkpoint; only the newest one per user/project stays pointed at). It is
+// optional: the in-memory store never lives long enough to need it.
+type OrphanCollector interface {
+	// CollectOrphans deletes checkpoint snapshots and blobs that nothing
+	// references and that are older than grace, in small batches. The grace
+	// window covers clients still holding an old checkpoint ID locally.
+	CollectOrphans(ctx context.Context, grace time.Duration) (snapshots, blobs int64, err error)
+}
+
 type Store interface {
 	Close() error
 	CreateUser(context.Context, domain.User) error

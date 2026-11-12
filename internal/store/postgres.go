@@ -1303,8 +1303,8 @@ func (p *Postgres) PurgeACEProject(ctx context.Context, userID, name, branch str
 	// client then gets 410 and re-uploads from scratch). Blobs are dropped
 	// only when no snapshot outside the doomed set and no repository file
 	// references them; chunks, postings and embeddings follow via FK cascade.
-	// History snapshots that drifted below 50% overlap survive as orphans —
-	// they share almost all blobs with newer checkpoints anyway.
+	// History snapshots that drifted below 50% overlap survive as orphans
+	// until the nightly CollectOrphans sweep picks them up.
 	_, err = tx.ExecContext(ctx, `
 WITH target AS (
 	SELECT blob_name FROM snapshot_blobs WHERE snapshot_id=$1
@@ -1340,6 +1340,91 @@ DELETE FROM blobs WHERE name IN (SELECT blob_name FROM dead_blobs)`, snapID, use
 	}
 	return tx.Commit()
 }
+
+const (
+	orphanSnapshotBatch = 200
+	orphanBlobBatch     = 1000
+	// orphanBatchPause spaces the batches out so the cascade deletes
+	// (snapshot_blobs, chunks, chunk_postings) never monopolize the 2-core
+	// host's IO while searches are running.
+	orphanBatchPause = 500 * time.Millisecond
+)
+
+// CollectOrphans is the periodic counterpart of PurgeACEProject's targeted
+// cleanup: checkpoint snapshots no project row or user checkpoint points at,
+// then blobs no snapshot or repository file references (chunks, postings and
+// chunk vectors follow via FK cascade). Each batch is its own statement and
+// re-checks the reference conditions, so concurrent uploads and a second
+// instance running the same sweep are both safe. hash_vectors are left alone
+// on purpose: they are keyed by content and make re-uploads embed for free.
+func (p *Postgres) CollectOrphans(ctx context.Context, grace time.Duration) (snapshots, blobs int64, err error) {
+	cutoff := time.Now().Add(-grace)
+	for {
+		res, err := p.db.ExecContext(ctx, `DELETE FROM snapshots WHERE id IN (
+			SELECT s.id FROM snapshots s
+			WHERE coalesce(s.repository_id,'')='' AND s.created_at < $1
+			  AND NOT EXISTS (SELECT 1 FROM user_ace_projects p WHERE p.snapshot_id=s.id)
+			  AND NOT EXISTS (SELECT 1 FROM user_checkpoints u WHERE u.snapshot_id=s.id)
+			LIMIT $2)`, cutoff, orphanSnapshotBatch)
+		if err != nil {
+			return snapshots, blobs, err
+		}
+		n, _ := res.RowsAffected()
+		snapshots += n
+		if n < orphanSnapshotBatch {
+			break
+		}
+		if err := sleepCtx(ctx, orphanBatchPause); err != nil {
+			return snapshots, blobs, err
+		}
+	}
+	names := []string{}
+	err = p.queryNoJIT(ctx, `SELECT b.name FROM blobs b
+		WHERE b.created_at < $1
+		  AND NOT EXISTS (SELECT 1 FROM snapshot_blobs s WHERE s.blob_name=b.name)
+		  AND NOT EXISTS (SELECT 1 FROM repository_files r WHERE r.blob_name=b.name)`, []any{cutoff}, func(rows *sql.Rows) error {
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				return err
+			}
+			names = append(names, name)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return snapshots, blobs, err
+	}
+	for start := 0; start < len(names); start += orphanBlobBatch {
+		batch := names[start:min(start+orphanBlobBatch, len(names))]
+		// Re-checked per batch: the candidate scan may be minutes old and a
+		// new checkpoint can have started referencing a blob since.
+		res, err := p.db.ExecContext(ctx, `DELETE FROM blobs b WHERE b.name = ANY($1)
+			AND NOT EXISTS (SELECT 1 FROM snapshot_blobs s WHERE s.blob_name=b.name)
+			AND NOT EXISTS (SELECT 1 FROM repository_files r WHERE r.blob_name=b.name)`, batch)
+		if err != nil {
+			return snapshots, blobs, err
+		}
+		n, _ := res.RowsAffected()
+		blobs += n
+		if err := sleepCtx(ctx, orphanBatchPause); err != nil {
+			return snapshots, blobs, err
+		}
+	}
+	return snapshots, blobs, nil
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
 func (p *Postgres) ListACEProjects(ctx context.Context, userID, modelID string) ([]domain.ACEProject, error) {
 	return p.listACEProjects(ctx, userID, modelID)
 }
