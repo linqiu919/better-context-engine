@@ -261,25 +261,47 @@ func embedOpenAI(ctx context.Context, cfg EmbeddingConfig, inputs []string, kind
 // Some models (e.g. Gemini 3.x on OpenRouter) cannot turn reasoning off and
 // reject the request with 400. postChat learns those from the error and
 // marks the model in mandatoryReasoning; from then on it gets the smallest
-// reasoning effort instead, with reasoningHeadroom extra output tokens so
-// the thinking does not eat the caller's max_tokens budget for content.
-func disableThinking(body map[string]any, url string) {
+// reasoning effort instead, with r.Headroom extra output tokens so the
+// thinking does not eat the caller's max_tokens budget for content. An
+// explicit r.Effort (admin-configured, prompt enhance only) skips all that
+// and asks for that effort directly.
+func disableThinking(body map[string]any, url string, r Reasoning) {
 	body["enable_thinking"] = false
 	if !isOpenRouter(url) {
 		return
 	}
 	model, _ := body["model"].(string)
-	if _, ok := mandatoryReasoning.Load(model); !ok {
-		body["reasoning"] = map[string]any{"enabled": false}
-		return
+	effort := r.Effort
+	if effort == "" {
+		if _, ok := mandatoryReasoning.Load(model); !ok {
+			body["reasoning"] = map[string]any{"enabled": false}
+			return
+		}
+		effort = "minimal"
 	}
-	body["reasoning"] = map[string]any{"effort": "minimal", "exclude": true}
+	body["reasoning"] = map[string]any{"effort": effort, "exclude": true}
 	if n, ok := body["max_tokens"].(int); ok {
-		body["max_tokens"] = n + reasoningHeadroom
+		body["max_tokens"] = n + r.Headroom
 	}
 }
 
 const reasoningHeadroom = 512
+
+// Reasoning is the thinking policy of one chat call. An empty Effort keeps
+// thinking off (minimal only when the model refuses off); an explicit one
+// is sent as-is on OpenRouter. Headroom is added to max_tokens whenever the
+// model thinks, so reasoning does not eat the content budget.
+type Reasoning struct {
+	Effort   string
+	Headroom int
+}
+
+// reasoningOff is the policy of every latency-bound enhancer-side call.
+var reasoningOff = Reasoning{Headroom: reasoningHeadroom}
+
+// ReasoningEfforts are the accepted enhancer_reasoning_effort values; ""
+// means auto (off, minimal when mandatory).
+var ReasoningEfforts = []string{"", "minimal", "low", "medium", "high"}
 
 // mandatoryReasoning holds model IDs whose endpoint refused reasoning off,
 // learned at runtime so no model list is hard-coded.
@@ -288,15 +310,15 @@ var mandatoryReasoning sync.Map
 func isOpenRouter(url string) bool { return strings.Contains(url, "openrouter") }
 
 // applyChatOptions is the single hook every enhancer-side chat call passes
-// its body through: thinking off, plus OpenRouter provider routing. Every
-// enhancer-side call is latency-bound and its time is dominated by output
-// tokens, so routing sorts by throughput instead of OpenRouter's default
-// price-weighted balance. Admin-pinned providers still come first (order
-// wins over sort; sort ranks the fallbacks), and fallbacks stay allowed so
-// OpenRouter still serves the request when all of them are down. The field
-// is gated to OpenRouter like "reasoning" above.
-func (c EnhanceConfig) applyChatOptions(body map[string]any, url string) {
-	disableThinking(body, url)
+// its body through: the thinking policy, plus OpenRouter provider routing.
+// Every enhancer-side call is latency-bound and its time is dominated by
+// output tokens, so routing sorts by throughput instead of OpenRouter's
+// default price-weighted balance. Admin-pinned providers still come first
+// (order wins over sort; sort ranks the fallbacks), and fallbacks stay
+// allowed so OpenRouter still serves the request when all of them are
+// down. The field is gated to OpenRouter like "reasoning" above.
+func (c EnhanceConfig) applyChatOptions(body map[string]any, url string, r Reasoning) {
+	disableThinking(body, url, r)
 	if !isOpenRouter(url) {
 		return
 	}
@@ -307,13 +329,18 @@ func (c EnhanceConfig) applyChatOptions(body map[string]any, url string) {
 	body["provider"] = provider
 }
 
-// postChat sends an enhancer-side chat completion: applyChatOptions, then
-// one retry with minimal reasoning when the model turns out to require it.
+// postChat sends an enhancer-side chat completion with thinking off.
 // url is the /v1 base.
 func (c EnhanceConfig) postChat(ctx context.Context, url string, body map[string]any, output any) error {
-	c.applyChatOptions(body, url)
+	return c.postChatReasoning(ctx, url, body, output, reasoningOff)
+}
+
+// postChatReasoning is postChat under an explicit thinking policy, with one
+// retry at minimal effort when the model turns out to require reasoning.
+func (c EnhanceConfig) postChatReasoning(ctx context.Context, url string, body map[string]any, output any, r Reasoning) error {
+	c.applyChatOptions(body, url, r)
 	err := postJSON(ctx, url+"/chat/completions", c.apiKey(), body, output)
-	if err == nil || !isOpenRouter(url) || !strings.Contains(strings.ToLower(err.Error()), "reasoning is mandatory") {
+	if err == nil || r.Effort != "" || !isOpenRouter(url) || !strings.Contains(strings.ToLower(err.Error()), "reasoning is mandatory") {
 		return err
 	}
 	// The refusal only happens with reasoning off, so the retry (now minimal
@@ -321,7 +348,7 @@ func (c EnhanceConfig) postChat(ctx context.Context, url string, body map[string
 	// when another one learned the model.
 	model, _ := body["model"].(string)
 	mandatoryReasoning.Store(model, true)
-	c.applyChatOptions(body, url)
+	c.applyChatOptions(body, url, r)
 	return postJSON(ctx, url+"/chat/completions", c.apiKey(), body, output)
 }
 

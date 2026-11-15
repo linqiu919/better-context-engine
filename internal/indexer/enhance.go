@@ -38,6 +38,23 @@ type EnhanceConfig struct {
 	// Providers are OpenRouter provider slugs preferred in order (see
 	// applyChatOptions); ignored for any other endpoint.
 	Providers []string
+	// Reasoning is the prompt-enhance thinking policy (enhancer_reasoning_*
+	// settings); every other enhancer-side call keeps reasoningOff.
+	Reasoning Reasoning
+}
+
+// DefaultReasoningTokens is the prompt-enhance thinking headroom when
+// enhancer_reasoning_tokens is unset: gemini-4-hydrogen spends up to ~940
+// reasoning tokens even at minimal effort.
+const DefaultReasoningTokens = 1536
+
+// ReasoningTokensValue resolves a stored enhancer_reasoning_tokens; explicit
+// "0" is valid, so unset or invalid falls back to the default.
+func ReasoningTokensValue(raw string) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil && v >= 0 {
+		return v
+	}
+	return DefaultReasoningTokens
 }
 
 // DefaultSummaryBudget is the per-round LLM call cap when summary_budget is
@@ -84,6 +101,7 @@ func (s *Service) enhanceConfig(ctx context.Context) EnhanceConfig {
 		SummaryModel:  get("summary_model", s.defaults.SummaryModel),
 		SummaryBudget: budget,
 		Providers:     ParseProviderList(values["enhancer_providers"]),
+		Reasoning:     Reasoning{Effort: strings.TrimSpace(values["enhancer_reasoning_effort"]), Headroom: ReasoningTokensValue(values["enhancer_reasoning_tokens"])},
 	}
 	// Same credential resolution as the embedding/rerank paths: dedicated
 	// key(s) win, the legacy shared model_api_key is only a fallback.
@@ -259,11 +277,12 @@ func (s *Service) EnhancePrompt(ctx context.Context, userID string, ws Workspace
 	}
 	cctx, cancel := context.WithTimeout(ctx, enhanceTTL)
 	defer cancel()
-	// Thinking off: prompt rewriting needs no chain-of-thought, and hybrid
-	// models otherwise bill/emit reasoning tokens before any content.
+	// Thinking follows the admin's enhancer_reasoning_* settings (default
+	// off): rewriting rarely needs chain-of-thought, and hybrid models
+	// otherwise bill/emit reasoning tokens before any content.
 	body := map[string]any{"model": cfg.Model, "messages": messages, "stream": false, "max_tokens": enhanceMaxTokens}
 	modelStart := time.Now()
-	err := cfg.postChat(cctx, url, body, &response)
+	err := cfg.postChatReasoning(cctx, url, body, &response, cfg.Reasoning)
 	finish := ""
 	if len(response.Choices) > 0 {
 		finish = response.Choices[0].FinishReason

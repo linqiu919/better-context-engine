@@ -1614,22 +1614,24 @@ func (s *Server) retrievalSettings(ctx context.Context) domain.RetrievalSettings
 		return v
 	}
 	return domain.RetrievalSettings{
-		EmbeddingProvider:   get("embedding_provider", s.config.EmbeddingProvider),
-		EmbeddingURL:        get("embedding_url", s.config.EmbeddingURL),
-		EmbeddingModel:      get("embedding_model", s.config.EmbeddingModel),
-		EmbeddingDimensions: getInt("embedding_dimensions", s.config.EmbeddingDimensions),
-		RerankerEnabled:     getBool("reranker_enabled", true),
-		RerankerModel:       get("reranker_model", s.config.RerankerModel),
-		RerankerTopK:        getInt("reranker_top_k", s.config.RerankerTopK),
-		EnhancerProvider:    get("enhancer_provider", "openai-compatible"),
-		EnhancerURL:         get("enhancer_url", s.config.EnhancerURL),
-		EnhancerModel:       get("enhancer_model", s.config.EnhancerModel),
-		SummaryModel:        get("summary_model", s.config.SummaryModel),
-		SummaryBudget:       summaryBudgetValue(values["summary_budget"]),
-		EnhancerProviders:   indexer.ParseProviderList(values["enhancer_providers"]),
-		EmbeddingAPIKey:     values["embedding_api_key"],
-		EnhancerAPIKey:      values["enhancer_api_key"],
-		UpdatedAt:           time.Now(),
+		EmbeddingProvider:       get("embedding_provider", s.config.EmbeddingProvider),
+		EmbeddingURL:            get("embedding_url", s.config.EmbeddingURL),
+		EmbeddingModel:          get("embedding_model", s.config.EmbeddingModel),
+		EmbeddingDimensions:     getInt("embedding_dimensions", s.config.EmbeddingDimensions),
+		RerankerEnabled:         getBool("reranker_enabled", true),
+		RerankerModel:           get("reranker_model", s.config.RerankerModel),
+		RerankerTopK:            getInt("reranker_top_k", s.config.RerankerTopK),
+		EnhancerProvider:        get("enhancer_provider", "openai-compatible"),
+		EnhancerURL:             get("enhancer_url", s.config.EnhancerURL),
+		EnhancerModel:           get("enhancer_model", s.config.EnhancerModel),
+		SummaryModel:            get("summary_model", s.config.SummaryModel),
+		SummaryBudget:           summaryBudgetValue(values["summary_budget"]),
+		EnhancerProviders:       indexer.ParseProviderList(values["enhancer_providers"]),
+		EnhancerReasoningEffort: strings.TrimSpace(values["enhancer_reasoning_effort"]),
+		EnhancerReasoningTokens: indexer.ReasoningTokensValue(values["enhancer_reasoning_tokens"]),
+		EmbeddingAPIKey:         values["embedding_api_key"],
+		EnhancerAPIKey:          values["enhancer_api_key"],
+		UpdatedAt:               time.Now(),
 	}
 }
 
@@ -1692,6 +1694,7 @@ func (s *Server) updateQuotaSettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getRetrievalSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, s.retrievalSettings(r.Context()))
 }
+
 // testRetrievalSettings probes one model card's unsaved form values against
 // the live providers; nothing is persisted. Failures are reported per check
 // in a 200 body — only a malformed request is an HTTP error.
@@ -1738,6 +1741,9 @@ func (s *Server) updateRetrievalSettings(w http.ResponseWriter, r *http.Request)
 		EnhancerAPIKey  *string `json:"enhancer_api_key"`
 		// nil = omitted (keep), [] = clear the OpenRouter provider list.
 		EnhancerProviders *[]string `json:"enhancer_providers"`
+		// "" (auto) and 0 are valid values, so both need present/absent too.
+		EnhancerReasoningEffort *string `json:"enhancer_reasoning_effort"`
+		EnhancerReasoningTokens *int    `json:"enhancer_reasoning_tokens"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -1785,6 +1791,12 @@ func (s *Server) updateRetrievalSettings(w http.ResponseWriter, r *http.Request)
 	if req.EnhancerProviders != nil {
 		current.EnhancerProviders = indexer.ParseProviderList(strings.Join(*req.EnhancerProviders, ","))
 	}
+	if req.EnhancerReasoningEffort != nil {
+		current.EnhancerReasoningEffort = strings.TrimSpace(*req.EnhancerReasoningEffort)
+	}
+	if req.EnhancerReasoningTokens != nil {
+		current.EnhancerReasoningTokens = *req.EnhancerReasoningTokens
+	}
 	if current.EmbeddingDimensions < 128 || current.EmbeddingDimensions > 8192 || current.RerankerTopK < 1 || current.RerankerTopK > 200 {
 		writeError(w, 400, "invalid model dimensions or reranker top-k")
 		return
@@ -1793,7 +1805,15 @@ func (s *Server) updateRetrievalSettings(w http.ResponseWriter, r *http.Request)
 		writeError(w, 400, "summary budget must be between 0 and 500")
 		return
 	}
-	values := map[string]string{"embedding_provider": current.EmbeddingProvider, "embedding_url": current.EmbeddingURL, "embedding_model": current.EmbeddingModel, "embedding_dimensions": strconv.Itoa(current.EmbeddingDimensions), "reranker_enabled": strconv.FormatBool(current.RerankerEnabled), "reranker_model": current.RerankerModel, "reranker_top_k": strconv.Itoa(current.RerankerTopK), "enhancer_provider": current.EnhancerProvider, "enhancer_url": current.EnhancerURL, "enhancer_model": current.EnhancerModel, "summary_model": current.SummaryModel, "summary_budget": strconv.Itoa(current.SummaryBudget), "embedding_api_key": current.EmbeddingAPIKey, "enhancer_api_key": current.EnhancerAPIKey, "enhancer_providers": strings.Join(current.EnhancerProviders, ",")}
+	if !slices.Contains(indexer.ReasoningEfforts, current.EnhancerReasoningEffort) {
+		writeError(w, 400, "reasoning effort must be one of minimal, low, medium, high or empty (auto)")
+		return
+	}
+	if current.EnhancerReasoningTokens < 0 || current.EnhancerReasoningTokens > 8192 {
+		writeError(w, 400, "reasoning tokens must be between 0 and 8192")
+		return
+	}
+	values := map[string]string{"embedding_provider": current.EmbeddingProvider, "embedding_url": current.EmbeddingURL, "embedding_model": current.EmbeddingModel, "embedding_dimensions": strconv.Itoa(current.EmbeddingDimensions), "reranker_enabled": strconv.FormatBool(current.RerankerEnabled), "reranker_model": current.RerankerModel, "reranker_top_k": strconv.Itoa(current.RerankerTopK), "enhancer_provider": current.EnhancerProvider, "enhancer_url": current.EnhancerURL, "enhancer_model": current.EnhancerModel, "summary_model": current.SummaryModel, "summary_budget": strconv.Itoa(current.SummaryBudget), "embedding_api_key": current.EmbeddingAPIKey, "enhancer_api_key": current.EnhancerAPIKey, "enhancer_providers": strings.Join(current.EnhancerProviders, ","), "enhancer_reasoning_effort": current.EnhancerReasoningEffort, "enhancer_reasoning_tokens": strconv.Itoa(current.EnhancerReasoningTokens)}
 	if err := s.store.SetSettings(r.Context(), values); err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -1824,6 +1844,7 @@ func (s *Server) authorizedRepo(w http.ResponseWriter, r *http.Request) (domain.
 	}
 	return repo, true
 }
+
 // latencyUser, when set, limits the latency profile to that user's searches;
 // empty keeps the site-wide profile.
 func (s *Server) buildOverview(ctx context.Context, owner string, all bool, latencyUser string) (domain.Overview, error) {

@@ -98,6 +98,12 @@ export function InfrastructurePage(){
           <div className="mc-cluster">
             <span className="mc-cluster-label">{t('Models')}</span>
             <Setting label={t('Enhancer model')}><input value={settings.enhancer_model} onChange={e=>update('enhancer_model',e.target.value)} placeholder="Qwen/Qwen3.5-9B"/></Setting>
+            {/* Thinking applies to prompt enhancement only and is an OpenRouter
+                request field; retrieval-path calls always keep it off. */}
+            {settings.enhancer_url.includes('openrouter')&&<div className="mc-row mc-row-model">
+              <Setting label={t('Enhancer reasoning effort')}><select value={settings.enhancer_reasoning_effort??''} onChange={e=>update('enhancer_reasoning_effort',e.target.value)}><option value="">{t('Auto (off when allowed)')}</option><option value="minimal">minimal</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></Setting>
+              <Setting label={t('Reasoning tokens')}><input type="number" min="0" max="8192" value={settings.enhancer_reasoning_tokens??1536} onChange={e=>update('enhancer_reasoning_tokens',Number(e.target.value)||0)}/></Setting>
+            </div>}
             <div className="mc-row mc-row-model">
               <Setting label={t('Summary model')}><input value={settings.summary_model} onChange={e=>update('summary_model',e.target.value)} placeholder="Qwen/Qwen3-8B"/></Setting>
               <Setting label={t('Summary budget')}><input type="number" min="0" max="500" value={settings.summary_budget} onChange={e=>update('summary_budget',Number(e.target.value)||0)}/></Setting>

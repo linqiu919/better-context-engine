@@ -429,6 +429,11 @@ type RetrievalSettings struct {
 	// EnhancerProviders lists OpenRouter provider slugs tried first, in
 	// order, for every chat call; only sent when EnhancerURL is OpenRouter.
 	EnhancerProviders []string `json:"enhancer_providers"`
+	// Prompt-enhance thinking: effort "" = auto (off, minimal when the model
+	// requires reasoning) or minimal/low/medium/high (OpenRouter only);
+	// tokens is the max_tokens headroom added while the model thinks.
+	EnhancerReasoningEffort string `json:"enhancer_reasoning_effort"`
+	EnhancerReasoningTokens int    `json:"enhancer_reasoning_tokens"`
 	// Per-provider dedicated keys; either may hold several keys
 	// (newline/comma-separated) that are round-robined per request to pool
 	// the accounts' separate rate limits. The legacy shared model_api_key
