@@ -2252,6 +2252,23 @@ code::after {
   mask-image: radial-gradient(ellipse 75% 90% at 62% 42%, #000 0%, transparent 72%);
   pointer-events: none;
 }
+/* Brand aura behind the console — one of the page's two color moments
+   (the other closes the page behind the final CTA). isolation keeps the
+   negative z-index inside the hero instead of under the page paper. */
+.landing-hero { isolation: isolate; }
+.landing-hero::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: 50%;
+  right: -6%;
+  width: 64%;
+  aspect-ratio: 1;
+  transform: translateY(-50%);
+  background: radial-gradient(circle, color-mix(in srgb, var(--blue) 20%, transparent), transparent 64%);
+  filter: blur(24px);
+  pointer-events: none;
+}
 .landing-hero > * { position: relative; }
 .landing-hero-copy { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
 /* Mono capability chip above the slogan — the product's spec tag. */
@@ -2295,9 +2312,9 @@ code::after {
    hero column; shrink it a notch so it stays on one line. */
 html[lang="en"] .slogan em { font-size: .8em; }
 .landing-hero-copy p {
-  margin: 0 0 26px;
+  margin: 0 0 28px;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1.65;
   max-width: 32em;
 }
@@ -2346,11 +2363,9 @@ html[lang="en"] .slogan em { font-size: .8em; }
   0% { transform: translateY(-100%); }
   60%, 100% { transform: translateY(100%); }
 }
-/* Hero visual: the three retrieval paths converging into one answer — a
-   frameless geometric diagram of the actual pipeline, with light pulses
-   flowing along the paths into a pulsing fusion node. */
-/* Hero console: the product artifact under the manifesto — a window-chromed
-   retrieval panel showing query → three-path fusion → selected hits. */
+/* Hero console: one retrieval request replayed — the query, a stage
+   waterfall on the shared 5s budget track, then the curated hits with their
+   line ranges, rerank scores and the related-symbols hint. */
 .hero-console {
   width: 100%;
   min-width: 0;
@@ -2389,74 +2404,90 @@ html[lang="en"] .slogan em { font-size: .8em; }
 @media (prefers-reduced-motion: no-preference) {
   .console-dot { animation: pulse 2s infinite; }
 }
-.console-fusion {
+.console-stages {
   display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: center;
-  gap: 14px;
-  min-width: 0;
-  padding: 16px 22px;
+  gap: 11px;
+  padding: 16px 18px 12px;
   border-bottom: 1px solid var(--line);
-  position: relative;
 }
-/* Soft blue aura behind the fusion node — the "answer" glows where the
-   three paths converge. */
-.console-fusion::before {
-  content: "";
-  position: absolute;
-  inset: -20px -10px;
-  background: radial-gradient(ellipse 42% 46% at 76% 50%, color-mix(in srgb, var(--blue) 12%, transparent), transparent 72%);
-  pointer-events: none;
+.stage-row {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr) 52px;
+  align-items: center;
+  gap: 12px;
 }
-.console-fusion > * { position: relative; }
+.stage-name { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 12.5px; font-weight: 500; }
+.stage-name small {
+  font: 10px/1.2 var(--font-mono);
+  font-weight: 400;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The track is the whole 5s budget, so the bars read as how little of it a
+   request actually spends. */
+.stage-track { position: relative; height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.stage-bar { position: absolute; top: 0; bottom: 0; min-width: 4px; border-radius: 999px; background: var(--blue); transform-origin: left; }
+.stage-row:first-child .stage-bar { background: linear-gradient(90deg, var(--warn), var(--ok), var(--blue)); }
+.stage-ms, .stage-total { font: 11px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.stage-ms { text-align: right; }
+.stage-total { display: flex; align-items: baseline; justify-content: flex-end; gap: 8px; padding-top: 2px; }
+.stage-total strong { font-size: 13px; font-weight: 600; color: var(--text); }
+.stage-total small { font-size: 11px; color: var(--faint); }
 .console-hits {
-  padding: 10px 12px;
+  padding: 10px 12px 12px;
   display: flex;
   flex-direction: column;
   gap: 2px;
   background: var(--surface-2);
 }
-/* Per-row legend text was dropped from the hit list — the colored dots
-   already carry the legend declared beside the fusion diagram. */
 .console-hit {
   display: grid;
-  grid-template-columns: 8px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto 36px;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   font-size: 12px;
-  border-radius: 5px;
-  padding: 6px 8px;
+  border-radius: 6px;
+  padding: 7px 8px;
   transition: background .15s;
 }
 .console-hit:hover { background: var(--surface); }
-.console-hit i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-.console-hit code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
-.fusion-labels {
+.console-hit code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+.hit-lines { font: 10.5px var(--font-mono); color: var(--faint); }
+.hit-score { font: 11px var(--font-mono); color: var(--blue); text-align: right; font-variant-numeric: tabular-nums; }
+.console-related {
   display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  align-self: stretch;
-  padding: 8px 0;
-  text-align: right;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin-top: 6px;
+  padding: 9px 8px 1px;
+  border-top: 1px dashed var(--line-strong);
+  font: 10.5px var(--font-mono);
 }
-.fusion-labels span, .fusion-answer {
-  font: 11px/1 var(--font-mono);
-  color: var(--muted);
-  letter-spacing: .02em;
-  white-space: nowrap;
+.console-related span { flex: 0 0 auto; color: var(--faint); letter-spacing: .06em; }
+.console-related code { min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; }
+/* Replay loop: bars sweep in stage by stage, then the hits land; the whole
+   request rewinds every 8s. Reduced motion shows the finished state. */
+@keyframes stage-grow {
+  0%, 6% { transform: scaleX(0); }
+  16%, 90% { transform: scaleX(1); }
+  97%, 100% { transform: scaleX(0); }
 }
-.console-fusion svg { width: 100%; height: auto; max-height: 148px; color: var(--blue); display: block; }
-.fusion-line { stroke: var(--line-strong); stroke-width: 1.2; }
-.fusion-line.fusion-lex, .fusion-flow.fusion-lex { stroke: var(--warn); }
-.fusion-line.fusion-str, .fusion-flow.fusion-str { stroke: var(--ok); }
-.fusion-line.fusion-sem, .fusion-flow.fusion-sem { stroke: var(--blue); }
-.fusion-line.fusion-out, .fusion-flow.fusion-out { stroke: var(--blue); }
-.fusion-node { fill: var(--blue); }
+@keyframes hit-land {
+  0%, 30% { opacity: 0; transform: translateY(4px); }
+  38%, 90% { opacity: 1; transform: none; }
+  97%, 100% { opacity: 0; transform: none; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .stage-bar { animation: stage-grow 8s var(--ease-out) infinite; animation-delay: calc(var(--i, 0) * .45s); }
+  .console-hit, .console-related { animation: hit-land 8s var(--ease-out) infinite; animation-delay: calc(var(--i, 0) * .14s); }
+  .console-related { --i: 3; }
+}
 .path-lex { color: var(--warn); }
 .path-str { color: var(--ok); }
 .path-sem { color: var(--blue); }
-.fact.path-lex strong, .fact.path-str strong, .fact.path-sem strong { color: var(--text); }
-.bento-cell h3.path-lex svg, .bento-cell h3.path-str svg, .bento-cell h3.path-sem svg { color: inherit; }
 /* Brand CTA is a neutral paper button — white card on the gray paper, ink
    text, hairline border; no accent-colored label anywhere. */
 .brand-btn.btn, .landing-page .brand-btn.btn, .login-page .brand-btn.btn {
@@ -2474,38 +2505,11 @@ html[lang="en"] .slogan em { font-size: .8em; }
 /* Geist paints a secondary button's icon in the inverted (white) label color,
    so on the paper brand-btn it only surfaced on hover; pin it to ink. */
 .brand-btn.btn .icon, .brand-btn.btn .icon svg { color: var(--text) !important; }
-.fusion-ring {
-  stroke: currentColor;
-  stroke-width: 1;
-  opacity: 0;
-  transform-box: fill-box;
-  transform-origin: center;
-}
-.fusion-flow {
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-dasharray: 22 400;
-  stroke-dashoffset: 422;
-  opacity: 0;
-}
-@media (prefers-reduced-motion: no-preference) {
-  .fusion-flow { opacity: .9; animation: fusion-flow 3s cubic-bezier(.45, 0, .55, 1) infinite; }
-  .fusion-flow-2 { animation-delay: .35s; }
-  .fusion-flow-3 { animation-delay: .7s; }
-  .fusion-flow-out { stroke-dasharray: 14 90; stroke-dashoffset: 104; animation-delay: 1.55s; }
-  .fusion-ring { animation: fusion-ring 3s ease-out infinite; animation-delay: 1.35s; }
-}
-@keyframes fusion-flow { to { stroke-dashoffset: 0; } }
-@keyframes fusion-ring {
-  0% { transform: scale(.5); opacity: .5; }
-  55%, 100% { transform: scale(2); opacity: 0; }
-}
 /* Capability facts strip: real system numbers in a hairline instrument row,
    the same metric language as the console's metric-strip. */
 .landing-facts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   margin-bottom: clamp(24px, 4vh, 36px);
@@ -2541,21 +2545,15 @@ html[lang="en"] .slogan em { font-size: .8em; }
   background: currentColor;
   flex: 0 0 auto;
 }
-.fact.path-lex small, .fact.path-str small, .fact.path-sem small { color: inherit; }
-.landing-features, .landing-adv { padding: clamp(28px, 5vh, 48px) 0 0; }
+.landing-features { padding: clamp(28px, 5vh, 48px) 0 0; }
 .section-lead {
-  margin: -14px 0 24px;
+  margin: -14px 0 28px;
   color: var(--muted);
-  font-size: 13px;
-  line-height: 1.65;
-  max-width: 46em;
+  font-size: 15px;
+  line-height: 1.7;
+  max-width: 44em;
 }
-.landing-steps {
-  margin-top: clamp(28px, 5vh, 48px);
-  padding: clamp(28px, 5vh, 48px) 0 0;
-  border-top: 1px solid var(--line);
-}
-.landing-features h2, .landing-steps h2 {
+.landing-features h2 {
   margin: 0 0 28px;
   font-size: clamp(22px, 2.6vw, 30px);
   letter-spacing: -.03em;
@@ -2577,33 +2575,130 @@ html[lang="en"] .slogan em { font-size: .8em; }
   height: 1px;
   background: var(--line-strong);
 }
-/* Asymmetric 2×2: uneven columns, the fusion cell tinted and the semantic
-   cell carrying a query→file example, so the grid never reads as four equal
-   text cards. */
-.landing-bento { display: grid; grid-template-columns: 1fr 1.35fr; gap: 14px; }
-.bento-cell {
+/* Chapter number: the one brand-blue mark in every eyebrow, matching the
+   closing index cards. */
+.section-eyebrow b { font-weight: 500; color: var(--blue); letter-spacing: .08em; }
+/* Retrieval pipeline: four stage cards in reading order, chevrons in the
+   gutters; only the recall card carries the three path colors. */
+.pipeline {
+  list-style: none;
+  margin: 0 0 clamp(24px, 4vh, 36px);
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+.pipe-stage {
+  position: relative;
   min-width: 0;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
-  padding: 22px;
-  transition: transform .25s cubic-bezier(.16, 1, .3, 1), border-color .25s, box-shadow .25s;
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  padding: 20px 20px 22px;
+  transition: transform .25s var(--ease-out), border-color .25s, box-shadow .25s;
 }
-.bento-cell:hover {
-  transform: translateY(-2px);
-  border-color: var(--line-strong);
-  box-shadow: 0 12px 30px -20px rgb(0 0 0 / .3);
+.pipe-stage:hover { transform: translateY(-3px); border-color: var(--line-strong); box-shadow: var(--shadow-md); }
+.pipe-stage:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -12px;
+  width: 7px;
+  height: 7px;
+  border-top: 1.5px solid var(--faint);
+  border-right: 1.5px solid var(--faint);
+  transform: translateY(-50%) rotate(45deg);
 }
-.bento-cell.bento-main { background: var(--surface-2); }
-.bento-cell h3 {
+.pipe-node {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-bottom: 14px;
+  border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--line));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--blue) 8%, var(--surface));
+  color: var(--blue);
+  font: 11px/1 var(--font-mono);
+}
+.pipe-stage h3 { margin: 0 0 8px; font-size: 16px; letter-spacing: -.02em; }
+.pipe-stage p { margin: 0; font-size: 13.5px; line-height: 1.65; color: var(--muted); }
+.pipe-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.pipe-chips span {
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, currentColor 40%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  font: 10.5px/1 var(--font-mono);
+}
+.pipeline-note { margin: 0; font-size: 12.5px; color: var(--faint); }
+/* Broad-question screen: copy left, the decomposition right — one question
+   fans out into sub-queries and comes back as per-file skeleton excerpts. */
+.landing-broad {
+  display: grid;
+  grid-template-columns: 1fr 1.1fr;
+  gap: clamp(32px, 5vw, 64px);
+  align-items: center;
+}
+.broad-copy { min-width: 0; }
+.broad-copy h2, .change-intro h2 { margin: 0 0 12px; }
+.broad-copy .section-lead { margin: 0 0 24px; }
+.broad-points { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.broad-points li { display: flex; align-items: flex-start; gap: 12px; font-size: 14px; line-height: 1.55; }
+.broad-points svg { flex: 0 0 auto; margin-top: 2px; color: var(--blue); }
+.broad-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+.broad-question {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 0 0 8px;
-  font-size: 15px;
-  letter-spacing: -.02em;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font: 12.5px var(--font-mono);
 }
-.bento-cell h3 svg { color: var(--muted); flex: 0 0 auto; }
-.bento-cell p { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+/* Bracket connector: a stem from the question splits to the three chips. */
+.broad-fan { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding-top: 18px; }
+.broad-fan::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 16.66%;
+  right: 16.66%;
+  height: 12px;
+  border: 1px solid var(--line-strong);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+}
+.broad-fan::after { content: ""; position: absolute; top: -14px; left: 50%; width: 1px; height: 32px; background: var(--line-strong); }
+.broad-fan span {
+  position: relative;
+  z-index: 1;
+  padding: 7px 6px;
+  border: 1px dashed color-mix(in srgb, var(--blue) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--blue) 7%, var(--surface));
+  color: var(--blue);
+  font: 11px/1.3 var(--font-mono);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.broad-skeleton { display: grid; gap: 8px; }
+.skel-file { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.skel-file code { display: block; margin-bottom: 6px; font-size: 11.5px; color: var(--text); }
+.skel-file pre { margin: 0; font: 11px/1.6 var(--font-mono); color: var(--muted); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
 /* Shared window chrome (hero console + MCP config panel): traffic-light
    dots + mono title bar, actions pinned right. */
 .win-chrome {
@@ -2638,57 +2733,51 @@ html[lang="en"] .slogan em { font-size: .8em; }
   color: var(--faint);
   margin-bottom: 8px;
 }
-/* Cost screen: centered narrative — intro and the before/after instrument
-   both sit on the page axis, the four proofs line up as a hairline strip. */
-.landing-adv {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  text-align: center;
-}
-.adv-intro { max-width: 560px; }
-.adv-intro .section-eyebrow, .enhance-head .section-eyebrow { justify-content: center; }
-.adv-intro .section-eyebrow::before, .enhance-head .section-eyebrow::before {
+.enhance-head .section-eyebrow { justify-content: center; }
+.enhance-head .section-eyebrow::before {
   content: "";
   width: 32px;
   height: 1px;
   background: var(--line-strong);
 }
-.cost-compare {
+/* Pay-for-change screen: intro + diff meter left (3 hot cells out of the
+   whole project), the five cost properties as a hairline ledger right. */
+.landing-change {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 18px;
-  width: min(920px, 100%);
-  margin-top: clamp(24px, 4vh, 40px);
-  text-align: left;
+  grid-template-columns: 1fr 1.15fr;
+  gap: clamp(32px, 5vw, 64px);
+  align-items: center;
 }
-.cost-col {
-  padding: 18px 18px 10px;
+.change-intro { min-width: 0; }
+.change-intro .section-lead { margin: 0 0 24px; }
+.diff-meter {
+  padding: 16px 18px;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: 14px;
   background: var(--surface);
   box-shadow: var(--shadow-sm);
 }
-.cost-after { border-top: 2px solid var(--blue); }
-.cost-col h3 { margin: 0 0 4px; font-size: 14px; }
-.cost-caption { margin: 0 0 14px; font-size: 12px; color: var(--muted); }
-.cost-bar { margin-bottom: 12px; }
-.cost-bar-track {
-  height: 8px;
-  border-radius: 999px;
-  background: var(--line);
-  overflow: hidden;
+.diff-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; font-size: 12px; color: var(--muted); }
+.diff-head strong { font: 600 18px var(--font-mono); letter-spacing: -.02em; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.diff-grid { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 4px; }
+.diff-grid i { aspect-ratio: 1; border-radius: 2px; background: var(--line); }
+.diff-grid i.hot { background: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 18%, transparent); }
+.diff-meter small { display: block; margin-top: 12px; font: 10.5px var(--font-mono); letter-spacing: .04em; color: var(--faint); }
+.change-list { min-width: 0; }
+.change-row { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 14px; padding: 15px 0; border-top: 1px solid var(--line); }
+.change-row:last-child { border-bottom: 1px solid var(--line); }
+.change-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--blue);
 }
-.cost-bar span {
-  display: block;
-  height: 100%;
-  border-radius: 999px;
-  background: var(--line-strong);
-  transform-origin: left;
-}
-.cost-after span { background: var(--blue); }
-.cost-bar small { display: block; margin-top: 6px; font-size: 11px; color: var(--muted); }
-@keyframes bar-grow { from { transform: scaleX(0); } }
+.change-row h3 { margin: 0 0 4px; font-size: 15px; letter-spacing: -.015em; }
+.change-row p { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--muted); }
 .landing-mcp {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2700,7 +2789,7 @@ html[lang="en"] .slogan em { font-size: .8em; }
   font-size: clamp(22px, 2.6vw, 30px);
   letter-spacing: -.03em;
 }
-.mcp-copy p { margin: 0 0 22px; font-size: 13px; line-height: 1.65; color: var(--muted); max-width: 36em; }
+.mcp-copy p { margin: 0 0 24px; font-size: 15px; line-height: 1.7; color: var(--muted); max-width: 36em; }
 .mcp-panel {
   border: 1px solid var(--line);
   border-left: 3px solid var(--blue);
@@ -2864,7 +2953,7 @@ html[lang="en"] .slogan em { font-size: .8em; }
 /* The enhanced prompt is one flowing LLM passage; sentences reveal in turn
    (inline spans, opacity only — transforms don't apply to inline boxes). */
 .enh-output { display: block; }
-.enh-line { font-size: 12.5px; line-height: 1.7; color: var(--text); }
+.enh-line { font-size: 13.5px; line-height: 1.7; color: var(--text); }
 .enh-caret {
   display: inline-block;
   width: 7px;
@@ -2891,6 +2980,21 @@ html[lang="en"] .slogan em { font-size: .8em; }
 @media (prefers-reduced-motion: reduce) {
   .enh-line { opacity: 1; }
 }
+/* The four properties of an enhanced prompt, as check chips under the demo. */
+.enh-tags { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 22px; }
+.enh-tags span {
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font: 11px/1 var(--font-mono);
+}
+.enh-tags span::before { content: "✓"; margin-right: 6px; color: var(--ok); }
+/* Getting-started entry switch: MCP config or Agent Skill shell snippet. */
+.entry-col { min-width: 0; }
+.entry-tabs { margin-bottom: 12px; }
+.entry-tabs button { font-size: 12.5px; padding: 10px 1px; }
 /* Compatible-tools strip: hairline-topped row under the MCP grid, mono
    label + real brand marks (simple-icons) following the theme via
    currentColor. */
@@ -2931,23 +3035,6 @@ html[lang="en"] .slogan em { font-size: .8em; }
 .tools-list .glide-hover { background: var(--surface); box-shadow: var(--shadow-sm); }
 .tool:hover { color: var(--text); }
 .tool svg { width: 16px; height: 16px; flex: 0 0 auto; }
-.adv-intro h2 {
-  margin: 0 0 12px;
-  font-size: clamp(22px, 2.6vw, 30px);
-  letter-spacing: -.03em;
-}
-.adv-intro p { margin: 0; font-size: 13px; line-height: 1.65; color: var(--muted); }
-.adv-list {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: clamp(18px, 3vw, 32px);
-  width: 100%;
-  margin-top: clamp(24px, 4vh, 40px);
-  text-align: left;
-}
-.adv-row { padding: 16px 0 0; border-top: 1px solid var(--line-strong); }
-.adv-row h3 { margin: 0 0 6px; font-size: 14px; letter-spacing: -.015em; }
-.adv-row p { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
 .steps-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2966,14 +3053,24 @@ html[lang="en"] .slogan em { font-size: .8em; }
   border-radius: 50%;
   background: var(--blue);
 }
-.step h3 { margin: 0 0 8px; font-size: 14px; letter-spacing: -.015em; }
-.step p { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+.step h3 { margin: 0 0 8px; font-size: 15px; letter-spacing: -.015em; }
+.step p { margin: 0; font-size: 13.5px; line-height: 1.6; color: var(--muted); }
 .landing-end {
+  position: relative;
+  isolation: isolate;
   text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 20px;
+}
+.landing-end::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -60% -10%;
+  background: radial-gradient(ellipse 46% 50% at 50% 50%, color-mix(in srgb, var(--blue) 15%, transparent), transparent 72%);
+  pointer-events: none;
 }
 .landing-end h2 {
   margin: 0;
@@ -2983,11 +3080,17 @@ html[lang="en"] .slogan em { font-size: .8em; }
   font-family: var(--font-display);
 }
 /* Display serif for every page-level heading (landing section h2s and the
-   console's single-row page titles); component chrome (bento h3, panel
+   console's single-row page titles); component chrome (card h3, panel
    heads, table headers) stays sans/mono. Serif takes gentler tracking. */
-.live-copy h2, .landing-features h2, .landing-steps h2, .adv-intro h2, .landing-mcp h2, .enhance-head h2, .mcp-hero h1, .mcp-section h2, .page-header h1 {
+.live-copy h2, .landing-features h2, .broad-copy h2, .change-intro h2, .landing-mcp h2, .enhance-head h2, .mcp-hero h1, .mcp-section h2, .page-header h1 {
   font-family: var(--font-display);
   letter-spacing: -.02em;
+}
+/* Landing section headings one notch larger than the doc pages: the
+   homepage reads as a site, not a console. */
+.live-copy h2, .landing-features h2, .broad-copy h2, .change-intro h2, .landing-mcp h2, .enhance-head h2 {
+  font-size: clamp(26px, 3.2vw, 38px);
+  line-height: 1.15;
 }
 .end-lead {
   margin: 0;
@@ -3000,7 +3103,7 @@ html[lang="en"] .slogan em { font-size: .8em; }
    retrieval / cost / connect screens — doubles as a recap and wayfinding. */
 .end-index {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
   width: 100%;
   margin-top: clamp(28px, 5vh, 48px);
@@ -3088,18 +3191,16 @@ html[lang="en"] .slogan em { font-size: .8em; }
   /* Each screen reveals once (Landing marks it .in-view): siblings in a
      group stagger by --i so a grid reads as one arrival, not N pops. Fill is
      backwards-only, so hover transforms are untouched once it has played. */
-  .landing-screen:not(.in-view) :is(.fact, .bento-cell, .step, .adv-row, .cost-col, .end-cell, .tool, .index-panel, .live-copy, .enh-card, .enh-arrow, .landing-end h2) { opacity: 0; }
-  .landing-screen.in-view :is(.fact, .bento-cell, .step, .adv-row, .cost-col, .end-cell, .tool, .index-panel, .live-copy, .enh-card, .enh-arrow, .landing-end h2) {
+  .landing-screen:not(.in-view) :is(.fact, .pipe-stage, .step, .change-row, .diff-meter, .broad-panel, .broad-points li, .end-cell, .tool, .index-panel, .live-copy, .enh-card, .enh-arrow, .enh-tags span, .entry-col, .landing-end h2) { opacity: 0; }
+  .landing-screen.in-view :is(.fact, .pipe-stage, .step, .change-row, .diff-meter, .broad-panel, .broad-points li, .end-cell, .tool, .index-panel, .live-copy, .enh-card, .enh-arrow, .enh-tags span, .entry-col, .landing-end h2) {
     animation: login-in .6s var(--ease-out) backwards;
     animation-delay: calc(var(--i, 0) * 70ms);
   }
-  .landing-screen:not(.in-view) .cost-bar span { transform: scaleX(0); }
-  .landing-screen.in-view .cost-bar span { animation: bar-grow .9s var(--ease-out) .2s backwards; }
-  :is(.landing-facts, .landing-bento, .steps-grid, .end-index, .tools-list, .adv-list, .cost-compare, .enhance-panel, .landing-live) > :nth-child(2) { --i: 1; }
-  :is(.landing-facts, .landing-bento, .steps-grid, .end-index, .tools-list, .adv-list, .cost-compare, .enhance-panel, .landing-live) > :nth-child(3) { --i: 2; }
-  :is(.landing-facts, .landing-bento, .steps-grid, .end-index, .tools-list, .adv-list, .cost-compare, .enhance-panel, .landing-live) > :nth-child(4) { --i: 3; }
-  :is(.landing-facts, .landing-bento, .steps-grid, .end-index, .tools-list, .adv-list, .cost-compare, .enhance-panel, .landing-live) > :nth-child(5) { --i: 4; }
-  :is(.landing-facts, .landing-bento, .steps-grid, .end-index, .tools-list, .adv-list, .cost-compare, .enhance-panel, .landing-live) > :nth-child(n+6) { --i: 5; }
+  :is(.landing-facts, .pipeline, .steps-grid, .end-index, .tools-list, .change-list, .broad-points, .enh-tags, .enhance-panel, .landing-live) > :nth-child(2) { --i: 1; }
+  :is(.landing-facts, .pipeline, .steps-grid, .end-index, .tools-list, .change-list, .broad-points, .enh-tags, .enhance-panel, .landing-live) > :nth-child(3) { --i: 2; }
+  :is(.landing-facts, .pipeline, .steps-grid, .end-index, .tools-list, .change-list, .broad-points, .enh-tags, .enhance-panel, .landing-live) > :nth-child(4) { --i: 3; }
+  :is(.landing-facts, .pipeline, .steps-grid, .end-index, .tools-list, .change-list, .broad-points, .enh-tags, .enhance-panel, .landing-live) > :nth-child(5) { --i: 4; }
+  :is(.landing-facts, .pipeline, .steps-grid, .end-index, .tools-list, .change-list, .broad-points, .enh-tags, .enhance-panel, .landing-live) > :nth-child(n+6) { --i: 5; }
 }
 /* Small or short viewports: one screen can no longer hold a full section
    group, so paging degrades to normal scrolling. 600px (not higher): a
@@ -3117,20 +3218,17 @@ html[lang="en"] .slogan em { font-size: .8em; }
 @media (max-width: 860px) {
   .landing-hero { grid-template-columns: 1fr; }
   .landing-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .fact:nth-child(2) { border-right: 0; }
+  .fact:nth-child(2n) { border-right: 0; }
   .fact:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
-  .fact:nth-child(3) { grid-column: span 2; border-right: 0; }
-  .landing-bento { grid-template-columns: 1fr; }
-  .cost-compare, .landing-mcp { grid-template-columns: 1fr; }
-  .adv-list { grid-template-columns: 1fr 1fr; }
+  .pipeline { grid-template-columns: 1fr 1fr; }
+  .pipe-stage::after { display: none; }
+  .landing-broad, .landing-change, .landing-mcp { grid-template-columns: 1fr; }
   .end-index { grid-template-columns: 1fr 1fr; }
+  .stage-row { grid-template-columns: 112px minmax(0, 1fr) 48px; }
   .landing-live { grid-template-columns: 1fr; gap: 24px; }
   .enhance-panel { grid-template-columns: 1fr; }
   .enh-arrow svg { transform: rotate(90deg); }
   .steps-grid { grid-template-columns: 1fr; gap: 18px; }
-  .console-fusion { grid-template-columns: 1fr; gap: 8px; }
-  .fusion-labels { flex-direction: row; justify-content: center; gap: 14px; padding: 0; text-align: center; }
-  .console-fusion .fusion-answer { text-align: center; }
   .feat-list { grid-template-columns: 1fr; }
   /* Flow diagram stacks vertically: links become down-pointing segments. */
   .flow-diagram { flex-direction: column; align-items: stretch; padding-top: 0; padding-left: 26px; }
@@ -3533,7 +3631,7 @@ html[lang="en"] .slogan em { font-size: .8em; }
   .metric-strip,
   .health-matrix,
   .detail-grid,
-  .adv-list,
+  .pipeline,
   .end-index,
   .result-summary { grid-template-columns: 1fr; }
   .metric-strip > div { border-right: 0; }
