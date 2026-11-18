@@ -7,9 +7,9 @@ export function Slogan(){
   const words = language==='zh' ? ['更好','更准','更稳'] : ['better','sharper','steadier']
   return <h1 className="slogan">
     <span className="slogan-prefix">
-      {language==='zh'?null:'A '}
+      {language==='zh'?null:<span className="slogan-fix">A</span>}
       <span className="word-rotator"><span className="word-track">{[...words,words[0]].map((w,i)=><span key={i}>{w}</span>)}</span></span>
-      {language==='zh'?'的':null}
+      {language==='zh'?<span className="slogan-fix">的</span>:null}
     </span>
     <br/><em>{t('context retrieval engine')}</em>
   </h1>

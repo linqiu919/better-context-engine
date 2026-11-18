@@ -2307,7 +2307,12 @@ code::after {
 .landing-hero-copy h1 em { font-style: normal; color: var(--muted); }
 /* The rotating-adjective line sits one notch below the big muted
    "retrieval engine." statement — a small lead-in, then the assertion. */
-.slogan-prefix { font-size: .62em; letter-spacing: -.03em; }
+/* Fixed glyphs (的 / A) get the same 1.04em line box as the rotating word
+   and the row aligns those boxes on their bottom edge, so every character
+   in the line shares one baseline. */
+.slogan-prefix { display: inline-flex; align-items: flex-end; font-size: .62em; letter-spacing: -.03em; }
+.slogan-fix { display: block; height: 1.04em; line-height: 1.04; }
+html[lang="en"] .slogan-prefix { gap: .25em; }
 /* The English second line ("context retrieval engine") is long for the
    hero column; shrink it a notch so it stays on one line. */
 html[lang="en"] .slogan em { font-size: .8em; }
