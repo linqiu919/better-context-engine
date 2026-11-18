@@ -46,8 +46,8 @@ func (s *Service) collectOrphans(collector store.OrphanCollector) {
 	ctx, cancel := context.WithTimeout(context.Background(), orphanGCTimeout)
 	defer cancel()
 	started := time.Now()
-	snapshots, blobs, err := collector.CollectOrphans(ctx, orphanGrace)
-	attrs := []any{"snapshots", snapshots, "blobs", blobs, "ms", time.Since(started).Milliseconds()}
+	n, err := collector.CollectOrphans(ctx, orphanGrace)
+	attrs := []any{"snapshots", n.Snapshots, "blobs", n.Blobs, "vectors", n.Vectors, "ms", time.Since(started).Milliseconds()}
 	if err != nil {
 		slog.Warn("orphan gc: sweep stopped early", append(attrs, "error", err)...)
 		return

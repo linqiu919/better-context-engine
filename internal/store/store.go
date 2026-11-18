@@ -19,9 +19,16 @@ var (
 // optional: the in-memory store never lives long enough to need it.
 type OrphanCollector interface {
 	// CollectOrphans deletes checkpoint snapshots and blobs that nothing
-	// references and that are older than grace, in small batches. The grace
-	// window covers clients still holding an old checkpoint ID locally.
-	CollectOrphans(ctx context.Context, grace time.Duration) (snapshots, blobs int64, err error)
+	// references and that are older than grace, then the content-keyed
+	// vectors no remaining chunk uses, in small batches. The grace window
+	// covers clients still holding an old checkpoint ID locally.
+	CollectOrphans(ctx context.Context, grace time.Duration) (OrphanCounts, error)
+}
+
+// OrphanCounts reports what one CollectOrphans sweep removed (partial counts
+// when it stops early).
+type OrphanCounts struct {
+	Snapshots, Blobs, Vectors int64
 }
 
 type Store interface {
