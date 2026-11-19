@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button, Input, Loading } from '@geist-ui/core'
 import { api, jsonBody } from '../api'
 import type { QuotaSettings, User } from '../types'
@@ -9,6 +9,7 @@ import { Empty } from '../components/Empty'
 import { Pagination } from '../components/Pagination'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { usePaged } from '../hooks/usePaged'
+import { useFitRows } from '../hooks/useFitRows'
 import { bytes, formatDate } from '../lib/format'
 import { useResource } from '../hooks/useResource'
 import { LoadError } from '../components/LoadError'
@@ -22,7 +23,10 @@ export function UsersPage(){
   const [query,setQuery]=useState('')
   const q=query.trim().toLowerCase()
   const visible=q?(users||[]).filter(u=>u.username.toLowerCase().includes(q)||(u.linuxdo_username||'').toLowerCase().includes(q)):(users||[])
-  const userPager=usePaged(visible,5)
+  // Page size follows the viewport height so the table fills the pane without a scrollbar.
+  const body=useRef<HTMLTableSectionElement>(null)
+  const fit=useFitRows(body,visible.length)
+  const userPager=usePaged(visible,fit)
   useEffect(()=>userPager.setPage(1),[q])
   const load=list.reload
   // One enable/disable at a time per row; a failure is shown, not swallowed.
@@ -64,7 +68,7 @@ export function UsersPage(){
           <th>{t('Last active')}</th>
           <th/>
         </tr></thead>
-        <tbody>{userPager.paged.map(user=><tr key={user.id}>
+        <tbody ref={body}>{userPager.paged.map(user=><tr key={user.id}>
           <td><div className="user-cell">
             <span className="avatar">{user.avatar_url?<img src={user.avatar_url} alt=""/>:user.username.slice(0,2).toUpperCase()}</span>
             <strong>{user.username}</strong>
