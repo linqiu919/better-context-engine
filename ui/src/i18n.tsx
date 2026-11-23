@@ -43,7 +43,7 @@ const zh:Record<string,string> = {
   'See exactly why a context fragment was selected.':'查看上下文片段被选中的具体原因。','Run retrieval':'执行检索','Information request':'检索请求','e.g. Where is authentication implemented?':'例如：认证逻辑在哪里实现？','Natural language':'自然语言','token budget':'Token 预算','Account token budget':'Token 预算随账户设置','Workspace overlay':'工作区覆盖层','Running hybrid retrieval':'正在执行混合检索','No retrieval yet':'尚未执行检索',
   'Latency':'延迟','Candidates':'候选数','Selected':'入选数','Est. tokens':'预估 Token','DETERMINISTIC FALLBACK':'确定性降级','Ranked fragments':'排序片段','BCE response':'BCE 响应','Lines':'行','Lexical':'词法','Path':'路径','Symbol':'符号','Semantic':'语义',
   'Saved':'已保存',
-  'Local accounts, repository ownership and retrieval usage.':'管理本地账号、仓库归属和检索使用情况。','Role':'角色','Last active':'最后活跃','Enable':'启用','Disable':'禁用',
+  'Local accounts, repository ownership and retrieval usage.':'管理本地账号、仓库归属和检索使用情况。','New user':'新增用户','Create':'创建','Optional':'选填','At least 10 characters.':'至少 10 个字符。','The account can sign in right away with this username and password.':'创建后即可用该用户名和密码登录。','invalid role':'角色无效','Role':'角色','Last active':'最后活跃','Enable':'启用','Disable':'禁用',
   'Quota & rate limits':'配额与限流','Usage & limits':'用量与限额','Retrieval today':'今日检索','Enhance today':'今日增强','Uploads today':'今日上传',
   'Administrator accounts are not subject to quotas.':'管理员账户不受配额限制。','Daily counters reset at midnight Beijing time. Storage is a standing limit.':'次数配额每日北京时间零点重置；存储为持续上限。',
   'Default quotas for regular users and per-minute rate limits for BCE endpoints.':'配置普通用户的默认配额与 BCE 端点的每分钟请求上限。',

@@ -125,6 +125,7 @@ func New(cfg config.Config, st store.Store, authService *auth.Service, idx *inde
 	api.HandleFunc("GET /api/v1/admin/users", s.adminOnly(s.adminUsers))
 	api.HandleFunc("GET /api/v1/admin/ace-usage", s.adminOnly(s.adminACEUsage))
 	api.HandleFunc("GET /api/v1/admin/ace-projects", s.adminOnly(s.adminACEProjects))
+	api.HandleFunc("POST /api/v1/admin/users", s.adminOnly(s.adminCreateUser))
 	api.HandleFunc("PATCH /api/v1/admin/users/{id}", s.adminOnly(s.adminUpdateUser))
 	api.HandleFunc("POST /api/v1/admin/users/{id}/reset-quota", s.adminOnly(s.adminResetQuota))
 	api.HandleFunc("GET /api/v1/admin/settings/quota", s.adminOnly(s.getQuotaSettings))
@@ -1458,6 +1459,67 @@ func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request) {
 		out = append(out, x)
 	}
 	writeJSON(w, 200, map[string]any{"users": out, "limits": s.quotaSettings(r.Context())})
+}
+
+// adminCreateUser opens an account on an administrator's behalf. Username and
+// password follow the self-registration rules; the email code, Turnstile and
+// the registration switch do not apply (the admin vouches for the account),
+// and the optional email skips the sign-up domain allowlist.
+func (s *Server) adminCreateUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username string      `json:"username"`
+		Email    string      `json:"email"`
+		Password string      `json:"password"`
+		Role     domain.Role `json:"role"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	username := strings.TrimSpace(req.Username)
+	if !usernameRE.MatchString(username) {
+		writeError(w, http.StatusBadRequest, "username must be 3-32 characters (letters, digits, . _ -)")
+		return
+	}
+	email := ""
+	if strings.TrimSpace(req.Email) != "" {
+		normalized, ok := normalizeEmail(req.Email)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "invalid email address")
+			return
+		}
+		email = normalized
+	}
+	role := req.Role
+	if role == "" {
+		role = domain.RoleUser
+	}
+	if role != domain.RoleAdmin && role != domain.RoleUser {
+		writeError(w, http.StatusBadRequest, "invalid role")
+		return
+	}
+	hash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := s.store.UserByUsername(r.Context(), username); err == nil {
+		writeError(w, http.StatusConflict, "username already taken")
+		return
+	}
+	if email != "" {
+		if _, err := s.store.UserByEmail(r.Context(), email); err == nil {
+			writeError(w, http.StatusConflict, "email already registered")
+			return
+		}
+	}
+	now := time.Now()
+	user := domain.User{ID: identity.NewID("user"), Username: username, Role: role, PasswordHash: hash, Email: email, AutoPurgeDays: domain.DefaultAutoPurgeDays, CreatedAt: now, LastActiveAt: now}
+	if err := s.store.CreateUser(r.Context(), user); err != nil {
+		writeError(w, http.StatusConflict, "username or email already taken")
+		return
+	}
+	s.audit(r.Context(), currentUser(r), "user.create", "user", user.ID, "success", map[string]any{"username": username, "role": role})
+	writeJSON(w, http.StatusCreated, user)
 }
 
 // adminResetQuota zeroes the target user's counters for the current day,

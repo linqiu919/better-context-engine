@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { Button, Input, Loading } from '@geist-ui/core'
+import { Button, Input, Loading, Select } from '@geist-ui/core'
+import { UserPlus } from '@geist-ui/icons'
 import { api, jsonBody } from '../api'
-import type { QuotaSettings, User } from '../types'
+import type { QuotaSettings, Role, User } from '../types'
 import { useI18n } from '../i18n'
 import { PageHeader } from '../components/PageHeader'
 import { Status } from '../components/Status'
@@ -49,10 +50,14 @@ export function UsersPage(){
     catch(e){setResetError((e as Error).message)}
     finally{setResetting(false)}
   }
+  const [creating,setCreating]=useState(false)
   if(!users)return list.error?<LoadError error={list.error} onRetry={list.reload}/>:<Loading/>
   return <>
     <PageHeader title={t('User management')} description={t('Local accounts, repository ownership and retrieval usage.')}
-      actions={<Input crossOrigin="" scale={0.75} clearable placeholder={t('Filter by username')} aria-label={t('Filter by username')} value={query} onChange={e=>setQuery(e.target.value)}/>}/>
+      actions={<>
+        <Input crossOrigin="" scale={0.75} clearable placeholder={t('Filter by username')} aria-label={t('Filter by username')} value={query} onChange={e=>setQuery(e.target.value)}/>
+        <Button auto scale={0.75} type="secondary" icon={<UserPlus/>} onClick={()=>setCreating(true)}>{t('New user')}</Button>
+      </>}/>
     {list.error&&<LoadError error={list.error} onRetry={list.reload}/>}
     {toggleError&&<p className="form-error">{toggleError}</p>}
     <div className="data-table-wrap" role="region" tabIndex={0}>
@@ -96,6 +101,50 @@ export function UsersPage(){
       {visible.length===0&&<Empty title={t('No matching users.')} text={t('Try a different keyword.')}/>}
     </div>
     <Pagination total={userPager.total} page={userPager.page} onChange={userPager.setPage} size={userPager.size}/>
+    {creating&&<CreateUserModal onClose={()=>setCreating(false)} onCreated={()=>{setCreating(false);setQuery('');load()}}/>}
     {pendingReset&&<ConfirmModal title={t('Reset quota')} target={pendingReset.username} text={t("Reset today's counters for this user?")} confirmLabel={t('Reset')} busy={resetting} error={resetError} onCancel={()=>setPendingReset(null)} onConfirm={confirmReset}/>}
   </>
+}
+
+// CreateUserModal: an administrator opens an account directly. Username and
+// password follow the sign-up rules (checked server-side); email is optional.
+// Same .modal-* shell as ConfirmModal: Escape/backdrop close unless busy.
+function CreateUserModal({onClose,onCreated}:{onClose:()=>void;onCreated:()=>void}){
+  const {t}=useI18n()
+  const [username,setUsername]=useState('')
+  const [email,setEmail]=useState('')
+  const [password,setPassword]=useState('')
+  const [role,setRole]=useState<Role>('user')
+  const [busy,setBusy]=useState(false)
+  const [error,setError]=useState('')
+  useEffect(()=>{const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'&&!busy)onClose()};document.addEventListener('keydown',onKey);return()=>document.removeEventListener('keydown',onKey)},[busy,onClose])
+  const cancel=()=>{if(!busy)onClose()}
+  const submit=async(e:React.FormEvent)=>{
+    e.preventDefault()
+    if(busy)return
+    setBusy(true);setError('')
+    try{await api<User>('/api/v1/admin/users',{method:'POST',...jsonBody({username:username.trim(),email:email.trim(),password,role})});onCreated()}
+    catch(err){setError(t((err as Error).message));setBusy(false)}
+  }
+  return <div className="modal-backdrop" onClick={cancel}><form className="modal-card" role="dialog" aria-modal="true" aria-label={t('New user')} onClick={e=>e.stopPropagation()} onSubmit={submit}>
+    <h3>{t('New user')}</h3>
+    <p className="modal-text">{t('The account can sign in right away with this username and password.')}</p>
+    <div className="modal-form">
+      <Input crossOrigin="" width="100%" autoFocus autoComplete="off" value={username} onChange={e=>setUsername(e.target.value)}>{t('Username')}</Input>
+      <Input crossOrigin="" width="100%" autoComplete="off" placeholder={t('Optional')} value={email} onChange={e=>setEmail(e.target.value)}>{t('Email')}</Input>
+      <div>
+        <Input.Password crossOrigin="" width="100%" autoComplete="new-password" value={password} onChange={e=>setPassword(e.target.value)}>{t('Password')}</Input.Password>
+        <p className="modal-hint">{t('At least 10 characters.')}</p>
+      </div>
+      <div className="modal-field">
+        <span>{t('Role')}</span>
+        <Select width="100%" value={role} onChange={v=>setRole(v as Role)} aria-label={t('Role')}>
+          <Select.Option value="user">{t('user')}</Select.Option>
+          <Select.Option value="admin">{t('admin')}</Select.Option>
+        </Select>
+      </div>
+    </div>
+    {error&&<p className="form-error">{error}</p>}
+    <div className="modal-actions"><Button auto scale={.8} onClick={cancel} disabled={busy}>{t('Cancel')}</Button><Button auto scale={.8} type="secondary" htmlType="submit" loading={busy} disabled={!username.trim()||!password}>{t('Create')}</Button></div>
+  </form></div>
 }

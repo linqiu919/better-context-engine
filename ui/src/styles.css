@@ -1325,6 +1325,11 @@ code::after {
   gap: 8px;
   margin-top: 18px;
 }
+/* Form modal (admin "New user"): stacked fields under the intro line. */
+.modal-form { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+.modal-hint { margin: 4px 0 0; font-size: 11px; color: var(--muted); }
+.modal-field { display: flex; flex-direction: column; gap: 6px; }
+.modal-field > span { font-size: 12px; color: var(--muted); }
 /* Announcements: login popup, admin preview modal and publish editor. */
 .announcement-card { width: min(560px, 100%); }
 .announcement-kicker {
