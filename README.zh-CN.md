@@ -4,7 +4,9 @@
 
 # Better Context Engine
 
-**ACE 兼容的代码上下文检索引擎：实时索引，为 AI 编程助手提供低延迟、高相关的上下文。**
+**更好的上下文，更好的代码。**
+
+可自部署的代码上下文引擎：实时索引，三路召回加重排，5 秒内把相关代码片段交给 AI 编程助手。
 
 [![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)](go.mod) [![Docker](https://img.shields.io/badge/docker-bifang1199%2Fbetter--context--engine-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/bifang1199/better-context-engine) [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?logo=postgresql&logoColor=white)](#快速开始) [![License](https://img.shields.io/badge/license-PolyForm%20NC%201.0-2BB8B2)](#许可证)
 
@@ -34,23 +36,26 @@ Better Context Engine（BCE）以 Go 编写，实时索引代码库，在 5 秒�
 - **三路召回** – BM25 词法（持久化倒排索引，camelCase/snake_case 拆分）+ 路径/符号结构打分 + 语义向量，RRF 融合。
 - **重排与精选** – 交叉编码器重排，再做每文件上限、相邻片段合并、小片段扩展。
 - **始终可用** – 语义打分经 pgvector 在库内完成；各模型通路独立冷却降级，词法/结构两路始终可用。
+- **请求合并与缓存** – 并发的相同请求合并为一次执行；配置 Redis 后，同一快照下的相同问题还可直接命中缓存。
 
 **索引**
 
 - **AST 分块** – tree-sitter 结构分块（8 种语言 grammar，方法级），正则、滑窗两级兜底。
 - **内容寻址** – `sha256(path+content)` blob + 不可变快照 + 确定性 checkpoint ID，跨用户去重。
 - **模型隔离** – 向量按模型 ID 存储，切换模型后缺失向量自动补嵌。
+- **闲置清理** – 项目超过设定天数未检索即自动清除索引数据（默认 60 天，用户可在账户设置中调整或关闭）。
 
 **接入与安全**
 
-- **ACE 端点** – `/batch-upload`、`/agents/codebase-retrieval`（未知 checkpoint 返回 `410`）、`/prompt-enhancer`，兼容 ace-tool-rs 类客户端。
+- **检索端点** – `/blobs/missing`（探测缺失内容，只传差异）、`/batch-upload`、`/agents/codebase-retrieval`（未知 checkpoint 返回 `410`）、`/prompt-enhancer`，兼容 ace-tool-rs 类客户端。
 - **令牌与配额** – 全局令牌 + 个人令牌（SHA-256 存储），按用户限 RPM、每日次数与存储上限。
+- **注册与登录** – 邮箱验证码自助注册（Turnstile 人机校验、邮箱域名白名单）与 LinuxDo OAuth 登录；未配置对应变量时入口自动隐藏。
 - **安全加固** – Argon2id 密码、CSRF 防护、RBAC、审计日志。
 
 **控制台**
 
 - **工作区** – 概览 / 我的项目 / 检索调试（片段归因、评测用例）/ MCP 用量 / 账户设置。
-- **管理后台** – 用户管理 / 全部项目 / 系统设置（模型与注册开关）/ 配额与限流 / 公告管理 / 审计日志。
+- **管理后台** – 用户管理 / 数据分析 / 全部项目 / MCP 管理 / 系统设置（模型与注册开关）/ 配额与限流 / 公告管理 / 审计日志。
 - **单二进制** – 中英双语、明暗主题；前端经 `go:embed` 嵌入。
 
 ## 概览
@@ -113,27 +118,29 @@ sequenceDiagram
 | Embedding | `Qwen/Qwen3-Embedding-8B` | 4096 维 |
 | 重排 | `Qwen/Qwen3-Reranker-8B` | Jina/Cohere 兼容 `/rerank` |
 | 提示增强 | `Qwen/Qwen3.5-9B` | OpenAI chat 协议 |
+| 代码摘要 | `Qwen/Qwen3-8B` | 与提示增强共用端点与 Key |
 
-默认端点为硅基流动（`api.siliconflow.cn/v1`），一个 `MODEL_API_KEY` 覆盖三条通路；均可经环境变量或管理员控制台改为本地服务（ollama/vLLM）。不配模型时检索仅走词法/结构两路。
+默认端点为硅基流动（`api.siliconflow.cn/v1`），一个 `MODEL_API_KEY` 覆盖全部模型通路；均可经环境变量或管理员控制台改为本地服务（ollama/vLLM）。不配模型时检索仅走词法/结构两路。
 
 ### 推荐配置（官方实例同款）
 
 | 通路 | 模型 | 提供方 |
 | :--- | :--- | :--- |
 | Embedding | `voyage-code-4`（1024 维） | Voyage AI |
-| 重排 | `rerank-2.5`（Top-K 50） | Voyage AI |
-| 提示增强 | `google/gemini-3.8-flash` | OpenRouter |
-| 代码摘要 | `google/gemini-3.8-flash` | OpenRouter |
+| 重排 | `rerank-3`（Top-K 50） | Voyage AI |
+| 提示增强 | `google/gemini-4-hydrogen`（服务商顺序 `google-ai-studio,google-vertex`） | OpenRouter |
+| 代码摘要 | `deepseek/deepseek-v4.1-flash-1017`（每轮预算 10 次） | OpenRouter |
 
-Voyage 的代码专用模型在代码检索场景表现更好。嵌入与重排共用 `https://api.voyageai.com/v1` 端点和 Key，query/document 非对称经 `input_type` 自动处理。增强与摘要走独立提供方，在 **系统设置 → 检索设置** 中配置。
+Voyage 的代码专用模型在代码检索场景表现更好。嵌入与重排共用 `https://api.voyageai.com/v1` 端点和 Key，query/document 非对称经 `input_type` 自动处理。增强与摘要走独立提供方，在 **系统设置 → 检索配置** 中配置。
 
 <details>
 <summary><b>增强模型选型建议</b></summary>
 
 - **同一个模型身兼数职** – 除 `/prompt-enhancer` 改写外，还负责检索中的中文词扩展、宽泛查询子查询分解；摘要模型与它共用同一地址和 Key（不能分属两个平台）。
-- **准确优先于速度** – 增强的价值在于点出真正的问题所在（具体常量、条数、调用点），而不是罗列泛泛的排查方向。实测不少更快更便宜的模型会写出看似具体、实则偏离根因的改写；`gemini-3.8-flash` 慢一些（单次约 5–10s），但在对比中更能点中根因。
+- **准确优先于速度** – 增强的价值在于点出真正的问题所在（具体常量、条数、调用点），而不是罗列泛泛的排查方向。实测不少更快更便宜的模型会写出看似具体、实则偏离根因的改写，因此宁可慢一些也选更能点中根因的模型（官方实例的 `gemini-4-hydrogen` 单次模型耗时约 7–11s）。
+- **摘要可以用更快更便宜的模型** – 摘要调用量大、只需一两句描述，对推理能力要求低；服务商顺序只是优先级（允许回退），摘要选非 Google 模型同样可用。
 - **用"已知答案"的真实问题评测** – 多个问题、每个多跑几次，核对改写是否命中根因，而不只看是否引用了代码。
-- **强制思考的模型也能用** – 经 OpenRouter 调用时默认关闭思考；若模型不允许关闭（如 Gemini 3.x），服务端自动改用最低思考档重试一次。
+- **强制思考的模型也能用** – 经 OpenRouter 调用时默认关闭思考；若模型不允许关闭（如 Gemini 系列），服务端自动改用最低思考档重试一次。
 
 </details>
 
@@ -166,7 +173,12 @@ go run ./cmd/server
 
 ## 接入方式
 
-在 MCP 客户端（Cursor、Claude Code 等）中配置 `bce-tool`（或任意 `ace-tool-rs` 类客户端），服务地址指向 BCE 部署地址即可。首次检索会自动上传并索引项目，无需手动导入。
+两种方式任选，服务地址都指向 BCE 部署地址；首次检索会自动上传并索引项目，无需手动导入。
+
+- **MCP** – 在 MCP 客户端（Cursor、Claude Code 等）中配置 `bce-tool`（或任意 `ace-tool-rs` 类客户端）。
+- **Agent Skill** – 把 [`skills/bce/SKILL.md`](skills/bce/SKILL.md) 放进智能体的 skills 目录，并设置 `BCE_BASE_URL`、`BCE_TOKEN` 两个环境变量；智能体按需以 `npx bce-tool --search` 一次性检索，无需常驻 MCP 进程。各智能体的安装目录见部署站点的 `/#skill` 页。
+
+完整接入说明见[文档站](https://bce-doc.wxnext.top)。
 
 | 令牌 | 格式 | 归属 |
 | :--- | :--- | :--- |
@@ -186,7 +198,7 @@ go run ./cmd/server
 | `COOKIE_SECURE` | `false` | 部署在 HTTPS 之后时设为 `true` |
 | `SESSION_TTL` | `24h` | 本地会话有效期 |
 | `DEMO_DATA` | `true` | 播种演示仓库与开发者账户 |
-| `MODEL_API_KEY` | 空 | 三条模型通路共享的 Bearer Key；本地服务忽略 |
+| `MODEL_API_KEY` | 空 | 全部模型通路共享的 Bearer Key；本地服务忽略 |
 | `EMBEDDING_PROVIDER` | `openai-compatible` | 可选 `ollama` / `openai-compatible` |
 | `EMBEDDING_URL` | `https://api.siliconflow.cn/v1` | Embedding 服务端点 |
 | `EMBEDDING_MODEL` | `Qwen/Qwen3-Embedding-8B` | 代码/查询嵌入模型 |
@@ -194,7 +206,16 @@ go run ./cmd/server
 | `RERANKER_MODEL` | `Qwen/Qwen3-Reranker-8B` | 交叉编码器重排模型（复用嵌入提供商的端点与 Key） |
 | `RERANKER_TOP_K` | `24` | 送入重排的融合候选数量 |
 | `ENHANCER_URL` | `https://api.siliconflow.cn/v1` | 提示增强 LLM 端点 |
-| `ENHANCER_MODEL` | `Qwen/Qwen3.5-9B` | 提示增强模型；留空则 `/prompt-enhancer` 返回 501 |
+| `ENHANCER_MODEL` | `Qwen/Qwen3.5-9B` | 提示增强模型，同时负责中文词扩展与宽泛查询子查询分解 |
+| `SUMMARY_MODEL` | `Qwen/Qwen3-8B` | 代码摘要模型（共用增强端点与 Key）；设为 `none` 关闭 LLM 摘要 |
+| `BCE_REDIS_ADDR` | 空 | 可选 Redis 地址（`host:port`），用于限流、检索缓存与注册验证码；留空则限流与验证码在进程内处理，不启用检索缓存 |
+| `BCE_REDIS_PASSWORD` | 空 | Redis 密码 |
+| `BCE_PUBLIC_URL` | 空 | 对外访问地址（如 `https://bce.example.com`），用于拼接 OAuth 回调地址 |
+| `SMTP_HOST` / `SMTP_PORT` | `smtp.gmail.com` / `587` | 注册验证码发信服务器 |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | 空 | 发信账号；未配置时不开放邮箱注册 |
+| `SMTP_FROM` | 同 `SMTP_USERNAME` | 发件人地址 |
+| `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | 空 | Cloudflare Turnstile 注册人机校验 |
+| `LINUXDO_CLIENT_ID` / `LINUXDO_CLIENT_SECRET` | 空 | LinuxDo Connect OAuth 登录；需同时配置 `BCE_PUBLIC_URL`，否则隐藏登录入口 |
 
 ## 开发
 

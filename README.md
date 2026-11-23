@@ -4,7 +4,9 @@
 
 # Better Context Engine
 
-**An ACE-compatible code context engine: real-time indexing and low-latency, high-relevance retrieval for AI coding assistants.**
+**Better context, better code.**
+
+A self-hostable code context engine — real-time indexing, three-way recall and reranking, relevant fragments to your coding agent within five seconds.
 
 [![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)](go.mod) [![Docker](https://img.shields.io/badge/docker-bifang1199%2Fbetter--context--engine-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/bifang1199/better-context-engine) [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?logo=postgresql&logoColor=white)](#quick-start) [![License](https://img.shields.io/badge/license-PolyForm%20NC%201.0-2BB8B2)](#license)
 
@@ -34,23 +36,26 @@ Better Context Engine (BCE) is written in Go. It indexes codebases in real time 
 - **Three-way recall** – BM25 lexical search (persistent inverted index, camelCase/snake_case splitting) + path/symbol structural scoring + semantic vectors, fused with RRF.
 - **Rerank & curation** – cross-encoder reranking, then per-file caps, adjacent-fragment merging and small-fragment expansion.
 - **Always available** – semantic scoring runs inside PostgreSQL via pgvector; each model path degrades independently with cooldowns, so lexical/structural retrieval never goes down.
+- **Request merging & cache** – concurrent identical requests collapse into one run; with Redis configured, a repeated question on the same snapshot is also served from cache.
 
 **Indexing**
 
 - **AST chunking** – tree-sitter structural chunks (8 language grammars, method level), with regex and sliding-window fallbacks.
 - **Content addressing** – `sha256(path+content)` blobs + immutable snapshots + deterministic checkpoint IDs, deduplicated across users.
 - **Model isolation** – vectors are stored per model ID; switching models backfills missing embeddings automatically.
+- **Idle cleanup** – a project not searched for a set number of days has its index data purged (60 days by default; users can change or disable this in account settings).
 
 **Integration & security**
 
-- **ACE endpoints** – `/batch-upload`, `/agents/codebase-retrieval` (`410` for unknown checkpoints), `/prompt-enhancer`; compatible with ace-tool-rs-style clients.
+- **Endpoints** – `/blobs/missing` (probe for missing content, upload only the diff), `/batch-upload`, `/agents/codebase-retrieval` (`410` for unknown checkpoints), `/prompt-enhancer`; compatible with ace-tool-rs-style clients.
 - **Tokens & quotas** – global token + personal tokens (stored as SHA-256), per-user RPM, daily allowance and storage ceiling.
+- **Sign-up & login** – self-service sign-up with email verification codes (Turnstile check, email-domain allowlist) and LinuxDo OAuth login; each entry point stays hidden until its variables are configured.
 - **Hardening** – Argon2id passwords, CSRF protection, RBAC, audit log.
 
 **Console**
 
 - **Workspace** – overview / my projects / retrieval debugger (fragment attribution, eval cases) / MCP usage / account settings.
-- **Admin** – users / all projects / system settings (models & registration) / quotas / announcements / audit log.
+- **Admin** – users / analytics / all projects / MCP management / system settings (models & registration) / quotas / announcements / audit log.
 - **Single binary** – English & Chinese, light & dark themes; the frontend is embedded via `go:embed`.
 
 ## Overview
@@ -113,17 +118,18 @@ sequenceDiagram
 | Embedding | `Qwen/Qwen3-Embedding-8B` | 4096 dimensions |
 | Reranker | `Qwen/Qwen3-Reranker-8B` | Jina/Cohere-compatible `/rerank` |
 | Prompt enhancer | `Qwen/Qwen3.5-9B` | OpenAI chat protocol |
+| Chunk summaries | `Qwen/Qwen3-8B` | Shares the enhancer's endpoint and key |
 
-The default endpoint is SiliconFlow (`api.siliconflow.cn/v1`); a single `MODEL_API_KEY` covers all three paths. Everything can be switched to local services (ollama/vLLM) via environment variables or the admin console. Without any model configured, retrieval runs on the lexical/structural paths only.
+The default endpoint is SiliconFlow (`api.siliconflow.cn/v1`); a single `MODEL_API_KEY` covers every model path. Everything can be switched to local services (ollama/vLLM) via environment variables or the admin console. Without any model configured, retrieval runs on the lexical/structural paths only.
 
 ### Recommended setup (what the hosted instance runs)
 
 | Path | Model | Provider |
 | :--- | :--- | :--- |
 | Embedding | `voyage-code-4` (1024 dims) | Voyage AI |
-| Reranker | `rerank-2.5` (Top-K 50) | Voyage AI |
-| Prompt enhancer | `google/gemini-3.8-flash` | OpenRouter |
-| Chunk summaries | `google/gemini-3.8-flash` | OpenRouter |
+| Reranker | `rerank-3` (Top-K 50) | Voyage AI |
+| Prompt enhancer | `google/gemini-4-hydrogen` (provider order `google-ai-studio,google-vertex`) | OpenRouter |
+| Chunk summaries | `deepseek/deepseek-v4.1-flash-1017` (budget 10 per round) | OpenRouter |
 
 Voyage's code-specialized models perform noticeably better for code retrieval. Embedding and reranker share the `https://api.voyageai.com/v1` endpoint and key, and the query/document asymmetry is handled automatically via `input_type`. The enhancer/summary path uses its own provider, configured under **System settings → Retrieval configuration**.
 
@@ -131,9 +137,10 @@ Voyage's code-specialized models perform noticeably better for code retrieval. E
 <summary><b>Choosing the enhancer model</b></summary>
 
 - **One model, several jobs** – besides `/prompt-enhancer` rewrites it drives term expansion for spaceless-script (e.g. Chinese) queries and broad-query decomposition. The summary model shares its endpoint and key, so both must live on the same platform.
-- **Accuracy over speed** – an enhancement is only useful if it names the actual cause (a specific constant, page size, call site) rather than listing generic things to check. Several faster, cheaper models produced rewrites that looked specific but missed the root cause. `gemini-3.8-flash` is slower (about 5–10s) but was better at pointing to the root cause in our comparisons.
+- **Accuracy over speed** – an enhancement is only useful if it names the actual cause (a specific constant, page size, call site) rather than listing generic things to check. Several faster, cheaper models produced rewrites that looked specific but missed the root cause, so pick the model that finds the root cause even if it is slower (the hosted instance's `gemini-4-hydrogen` takes about 7–11s of model time per call).
+- **Summaries can use a faster, cheaper model** – they are high-volume one- or two-sentence descriptions that need little reasoning. The provider order is only a preference (fallbacks stay allowed), so a non-Google summary model routes fine.
 - **Evaluate with questions whose answer you know** – several questions, several runs each, checking whether the rewrite hits the root cause, not just whether it cites code.
-- **Mandatory-reasoning models work too** – calls through OpenRouter turn reasoning off; when a model refuses that (e.g. Gemini 3.x), the server retries once with minimal reasoning.
+- **Mandatory-reasoning models work too** – calls through OpenRouter turn reasoning off; when a model refuses that (e.g. Gemini models), the server retries once with minimal reasoning.
 
 </details>
 
@@ -166,7 +173,12 @@ Without `BCE_DATABASE_URL` the server uses an in-memory store.
 
 ## Connecting a client
 
-Configure `bce-tool` (or any `ace-tool-rs`-style client) in your MCP client — Cursor, Claude Code, … — with the base URL pointing at your BCE deployment. The first retrieval uploads and indexes the project automatically.
+Pick either route and point it at your BCE deployment. The first retrieval uploads and indexes the project automatically.
+
+- **MCP** – configure `bce-tool` (or any `ace-tool-rs`-style client) in your MCP client — Cursor, Claude Code, …
+- **Agent Skill** – drop [`skills/bce/SKILL.md`](skills/bce/SKILL.md) into your agent's skills directory and set `BCE_BASE_URL` and `BCE_TOKEN`; the agent runs one-shot `npx bce-tool --search` calls on demand, with no resident MCP process. The `/#skill` page of your deployment lists the skills directory for each agent.
+
+Full setup guide: [documentation](https://bce-doc.wxnext.top).
 
 | Token | Format | Attribution |
 | :--- | :--- | :--- |
@@ -186,7 +198,7 @@ Configure `bce-tool` (or any `ace-tool-rs`-style client) in your MCP client — 
 | `COOKIE_SECURE` | `false` | Set to `true` when deployed behind HTTPS |
 | `SESSION_TTL` | `24h` | Local session lifetime |
 | `DEMO_DATA` | `true` | Seed a demo repository and developer account |
-| `MODEL_API_KEY` | empty | Bearer key shared by all three model paths; local servers ignore it |
+| `MODEL_API_KEY` | empty | Bearer key shared by every model path; local servers ignore it |
 | `EMBEDDING_PROVIDER` | `openai-compatible` | `ollama` / `openai-compatible` |
 | `EMBEDDING_URL` | `https://api.siliconflow.cn/v1` | Embedding service endpoint |
 | `EMBEDDING_MODEL` | `Qwen/Qwen3-Embedding-8B` | Code/query embedding model |
@@ -194,7 +206,16 @@ Configure `bce-tool` (or any `ace-tool-rs`-style client) in your MCP client — 
 | `RERANKER_MODEL` | `Qwen/Qwen3-Reranker-8B` | Cross-encoder rerank model (reuses the embedding provider's endpoint and key) |
 | `RERANKER_TOP_K` | `24` | Number of fused candidates sent to the reranker |
 | `ENHANCER_URL` | `https://api.siliconflow.cn/v1` | Prompt-enhancer LLM endpoint |
-| `ENHANCER_MODEL` | `Qwen/Qwen3.5-9B` | Prompt-enhancer model; empty makes `/prompt-enhancer` return 501 |
+| `ENHANCER_MODEL` | `Qwen/Qwen3.5-9B` | Prompt-enhancer model; also drives term expansion for spaceless-script queries and broad-query decomposition |
+| `SUMMARY_MODEL` | `Qwen/Qwen3-8B` | Chunk-summary model (shares the enhancer's endpoint and key); `none` turns LLM summaries off |
+| `BCE_REDIS_ADDR` | empty | Optional Redis address (`host:port`) for rate limits, the retrieval cache and sign-up codes; empty keeps limits and codes in-process and disables the retrieval cache |
+| `BCE_REDIS_PASSWORD` | empty | Redis password |
+| `BCE_PUBLIC_URL` | empty | Public base URL (e.g. `https://bce.example.com`), used to build the OAuth callback |
+| `SMTP_HOST` / `SMTP_PORT` | `smtp.gmail.com` / `587` | Mail server for sign-up verification codes |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | empty | Mail account; email sign-up stays closed until set |
+| `SMTP_FROM` | `SMTP_USERNAME` | Sender address |
+| `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | empty | Cloudflare Turnstile check on sign-up |
+| `LINUXDO_CLIENT_ID` / `LINUXDO_CLIENT_SECRET` | empty | LinuxDo Connect OAuth login; also needs `BCE_PUBLIC_URL`, otherwise the login button stays hidden |
 
 ## Development
 

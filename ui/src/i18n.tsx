@@ -139,7 +139,7 @@ const zh:Record<string,string> = {
   'Prompt enhancement':'提示增强','From a vague question to a precise prompt':'让模糊需求成为精确指令',
   'Your question':'原始提问','fix the login failure':'帮我修一下登录失败的问题','Enhanced prompt':'增强后的提示',
   // 首页（Landing）
-  'ACE-compatible · MCP & Agent Skill':'ACE 兼容 · MCP 与 Agent Skill',
+  'MCP · Agent Skill':'MCP 与 Agent Skill',
   'Three-way recall, reranking and curation hand your coding agent the right code fragments — within a five-second budget.':'三路召回、重排与结果整理，在 5 秒预算内把对的代码片段交给你的编码智能体。',
   '"where is login rate limiting handled"':'「登录限流在哪里处理」','Recall':'召回','Curate':'整理','Relate':'关联','Total':'合计','budget':'预算',
   'Diff-only upload':'差异上传','Only changed content travels':'内容寻址，差异只传一次',

@@ -126,7 +126,7 @@ export function Landing({onSignIn,dark,toggleTheme}:{onSignIn:()=>void;dark:bool
         <div className="scroll-cue" aria-hidden="true"><span>{t('Scroll')}</span><i/></div>
         <div className="landing-hero">
           <div className="landing-hero-copy">
-            <span className="hero-eyebrow"><i/>{t('ACE-compatible · MCP & Agent Skill')}</span>
+            <span className="hero-eyebrow"><i/>{t('MCP · Agent Skill')}</span>
             <Slogan/>
             <p>{t('Three-way recall, reranking and curation hand your coding agent the right code fragments — within a five-second budget.')}</p>
             <div className="landing-cta"><Button auto type="secondary" className="brand-btn" onClick={onSignIn}>{t('Get started')}</Button><button type="button" className="ghost-link" onClick={()=>scrollToScreen('start-screen')}>{t('See how to connect')}<ArrowDown size={13}/></button></div>
